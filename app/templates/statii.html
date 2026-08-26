@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Stații{% endblock %}
+{% block content %}
+<h1>Stații</h1>
+
+<form method="get" class="filter-row">
+  <input type="search" name="q" value="{{ search }}" placeholder="Căutare liberă (nume, OU, OS, IP)">
+  <select name="ou">
+    <option value="">Toate OU-urile</option>
+    {% for o in ou_options %}
+    <option value="{{ o }}" {{ 'selected' if o == ou else '' }}>{{ o }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">Toate statusurile</option>
+    {% for s in status_options %}
+    <option value="{{ s }}" {{ 'selected' if s == status else '' }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <select name="os">
+    <option value="">Toate OS-urile</option>
+    {% for o in os_options %}
+    <option value="{{ o }}" {{ 'selected' if o == os_filter else '' }}>{{ o }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="dir" value="{{ direction }}">
+  <button type="submit">Filtrează</button>
+  <a class="btn-secondary" href="{{ url_for('stations') }}">Resetează</a>
+  <a class="btn-secondary"
+     href="{{ url_for('export_stations_csv', q=search, ou=ou, status=status, os=os_filter, sort=sort, dir=direction) }}">
+    Export CSV
+  </a>
+</form>
+
+<p class="result-count">{{ rows | length }} stații</p>
+
+<div class="table-scroll">
+<table class="data-table sortable">
+  <thead>
+    <tr>
+      {% for key, label in [('name','Nume'), ('ou','OU'), ('model','Model'), ('os','OS + build'),
+                             ('ip','IP'), ('user','Ultimul user'), ('disk','Liber C:'),
+                             ('uptime','Uptime'), ('av','AV'), ('status','Status'), ('last_seen','Ultima vedere')] %}
+      <th>
+        <a href="{{ url_for('stations', q=search, ou=ou, status=status, os=os_filter, sort=key,
+                              dir=('desc' if (sort == key and direction == 'asc') else 'asc')) }}">
+          {{ label }}
+          {% if sort == key %}<span class="sort-arrow">{{ '▲' if direction == 'asc' else '▼' }}</span>{% endif %}
+        </a>
+      </th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('station_detail', name=r.name) }}">{{ r.name }}</a></td>
+      <td>{{ r.ou_path or '—' }}</td>
+      <td>{{ r.model or '—' }}</td>
+      <td>{{ r.os_caption or '—' }}{% if r.os_build %} ({{ r.os_build }}){% endif %}</td>
+      <td>{{ r.ip_address or '—' }}</td>
+      <td>{{ r.logged_on_user or r.last_logged_on_user or '—' }}</td>
+      <td class="num">{{ r.c_free_pct | fmt_pct }}</td>
+      <td class="num">{{ r.uptime_days | fmt_num }}</td>
+      <td>
+        {% if r.av_name %}
+          {{ r.av_name }}
+          {% if r.av_enabled == 0 %}<span class="badge badge-crit">dezact.</span>{% endif %}
+          {% if r.av_up_to_date == 0 %}<span class="badge badge-warn">vechi</span>{% endif %}
+        {% else %}—{% endif %}
+      </td>
+      <td><span class="badge badge-{{ r.status | status_class }}">{{ r.status or '—' }}</span></td>
+      <td>{{ r.last_seen | fmt_dt }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="11" class="empty-state">Nicio stație găsită.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

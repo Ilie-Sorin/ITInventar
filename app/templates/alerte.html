@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Alerte{% endblock %}
+{% block content %}
+<h1>Alerte</h1>
+
+{% if not run %}
+<p class="empty-state">Nicio rulare finalizată încă.</p>
+{% else %}
+<p class="subtitle">Ultima rulare: {{ run.started_at | fmt_dt }} (Nivel {{ run.level }})</p>
+
+{% for severity, title in [('crit', 'Critice'), ('warn', 'Avertismente'), ('info', 'Informative')] %}
+<section class="card">
+  <h2><span class="badge badge-{{ severity }}">{{ title }}</span> <span class="muted">({{ grouped[severity] | length }})</span></h2>
+  {% if grouped[severity] %}
+  <table class="data-table compact">
+    <thead><tr><th>Stație</th><th>Regulă</th><th>Mesaj</th><th>Valoare</th></tr></thead>
+    <tbody>
+    {% for a in grouped[severity] %}
+      <tr>
+        <td><a href="{{ url_for('station_detail', name=a.host_name) }}">{{ a.host_name }}</a></td>
+        <td>{{ a.rule }}</td>
+        <td>{{ a.message }}</td>
+        <td>{{ a.value or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">Nicio alertă {{ title | lower }} în ultima rulare.</p>
+  {% endif %}
+</section>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Rulări{% endblock %}
+{% block content %}
+<h1>Rulări</h1>
+<p class="subtitle">Pagina de decizie a pilotului: ce aduce în plus Nivelul 2 și cât costă în timp de scanare.</p>
+
+<section class="card">
+  <h2>Nivel 1 vs. Nivel 2 — medii pe toate rulările finalizate</h2>
+  {% if comparison %}
+  <table class="data-table">
+    <thead>
+      <tr><th>Nivel</th><th class="num">Nr. rulări</th><th class="num">Durată medie</th>
+          <th class="num">Medie CIM</th><th class="num">Medie registry</th><th class="num">Rată succes</th></tr>
+    </thead>
+    <tbody>
+    {% for c in comparison %}
+      <tr>
+        <td>Nivel {{ c.level }}</td>
+        <td class="num">{{ c.run_count }}</td>
+        <td class="num">{{ c.avg_duration_sec | fmt_duration_sec }}</td>
+        <td class="num">{{ c.avg_cim_ms | fmt_ms_to_s }}</td>
+        <td class="num">{% if c.level == 2 %}{{ c.avg_reg_ms | fmt_ms_to_s }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="num">{{ (c.avg_success_rate * 100) | fmt_pct if c.avg_success_rate is not none else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if comparison | length == 2 %}
+  {% set l1 = comparison | selectattr('level', 'equalto', 1) | first %}
+  {% set l2 = comparison | selectattr('level', 'equalto', 2) | first %}
+  {% if l1 and l2 and l1.avg_reg_ms is none and l2.avg_reg_ms %}
+  <p class="callout">Nivelul 2 adaugă în medie {{ l2.avg_reg_ms | fmt_ms_to_s }} per stație față de Nivelul 1
+     (doar pentru citirea registry prin StdRegProv) — vezi și pagina <a href="{{ url_for('software') }}">Software</a>
+     pentru ce aduce în plus acest timp.</p>
+  {% endif %}
+  {% endif %}
+  {% else %}
+  <p class="empty-state">Încă nicio rulare finalizată la fiecare nivel — comparația apare după cel puțin o rulare de Nivel 1 și una de Nivel 2.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Istoric rulări</h2>
+  {% if runs %}
+  <div class="table-scroll">
+  <table class="data-table compact">
+    <thead>
+      <tr><th>Start</th><th>Nivel</th><th>OU</th><th>Stare</th><th class="num">Stații</th>
+          <th class="num">OK</th><th class="num">Parțial</th><th class="num">Offline</th><th class="num">Eroare</th>
+          <th class="num">Durată</th><th class="num">Medie CIM</th><th class="num">Medie reg.</th></tr>
+    </thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td>{{ r.started_at | fmt_dt }}</td>
+        <td>{{ r.level }}</td>
+        <td>{{ r.ou_base }}</td>
+        <td>
+          {% if r.status == 'running' %}<span class="badge badge-warn">în curs</span>
+          {% elif r.status == 'interrupted' %}<span class="badge badge-crit">întreruptă</span>
+          {% else %}<span class="badge badge-ok">finalizată</span>{% endif %}
+        </td>
+        <td class="num">{{ r.host_count }}</td>
+        <td class="num">{{ r.ok_count }}</td>
+        <td class="num">{{ r.partial_count }}</td>
+        <td class="num">{{ r.offline_count }}</td>
+        <td class="num">{{ r.error_count }}</td>
+        <td class="num">{{ r.duration_sec | fmt_duration_sec }}</td>
+        <td class="num">{{ r.avg_cim_ms | fmt_ms_to_s }}</td>
+        <td class="num">{% if r.level == 2 %}{{ r.avg_reg_ms | fmt_ms_to_s }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty-state">Nicio rulare încă.</p>
+  {% endif %}
+</section>
+{% endblock %}

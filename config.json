@@ -1,0 +1,18 @@
+{
+  "ou_base": null,
+  "level": 1,
+  "throughput": 12,
+  "tcp_probe_timeout_ms": 400,
+  "cim_timeout_sec": 45,
+  "reg_timeout_sec": 60,
+  "db_path": "inventar.db",
+  "keep_runs": 60,
+  "alerts": {
+    "disk_free_pct_min": 10,
+    "uptime_days_max": 30,
+    "av_signature_age_days_max": 7,
+    "reboot_pending_days_max": 7,
+    "not_seen_days_max": 21,
+    "unsupported_os_builds": ["19045", "19044", "19043"]
+  }
+}

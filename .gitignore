@@ -1,0 +1,19 @@
+# Bază de date (creată automat, conține date reale de inventar — nu se versionează)
+inventar.db
+inventar.db-wal
+inventar.db-shm
+
+# Arhive de rulări și loguri — regenerabile din rulări reale, pot conține
+# nume de stații/utilizatori din domeniul real
+runs/*.ndjson
+runs/*.meta.json
+logs/*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor/OS
+.vscode/
+.idea/
+Thumbs.db

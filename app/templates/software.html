@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Software{% endblock %}
+{% block content %}
+<h1>Software</h1>
+<p class="subtitle">Doar din stații cu date de Nivel 2. Agregare pe cea mai recentă colectare a fiecărei stații.</p>
+
+{% if drilldown_hosts is not none %}
+<section class="card">
+  <h2>{{ drilldown_name }}{% if drilldown_version %} — {{ drilldown_version }}{% endif %}</h2>
+  <a class="link-more" href="{{ url_for('software') }}">← Înapoi la toate produsele</a>
+  {% if drilldown_hosts %}
+  <table class="data-table compact">
+    <thead><tr><th>Stație</th><th>OU</th><th>Producător</th><th>Instalat</th><th>Scop</th></tr></thead>
+    <tbody>
+    {% for h in drilldown_hosts %}
+      <tr>
+        <td><a href="{{ url_for('station_detail', name=h.name) }}">{{ h.name }}</a></td>
+        <td>{{ h.ou_path or '—' }}</td>
+        <td>{{ h.publisher or '—' }}</td>
+        <td>{{ h.install_date or '—' }}</td>
+        <td>{{ h.scope }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">Nicio stație găsită.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="filter-row">
+    <p class="result-count">{{ rows | length }} combinații produs+versiune</p>
+    <a class="btn-secondary" href="{{ url_for('export_software_csv') }}">Export CSV</a>
+  </div>
+  <div class="table-scroll">
+  <table class="data-table sortable">
+    <thead><tr><th>Produs</th><th>Versiune</th><th class="num">Nr. stații</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><a href="{{ url_for('software', name=r.name, version=r.version or '') }}">{{ r.name }}</a></td>
+        <td>{{ r.version or '—' }}</td>
+        <td class="num">{{ r.host_count }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3" class="empty-state">Fără date de software de Nivel 2 încă.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

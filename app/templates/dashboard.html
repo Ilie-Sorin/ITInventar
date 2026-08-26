@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Sumar{% endblock %}
+{% block content %}
+<h1>Sumar</h1>
+
+{% if not run %}
+<p class="empty-state">Nicio rulare finalizată încă. Pornește o scanare din antet ca să vezi date aici.</p>
+{% else %}
+<div class="stat-grid">
+  <div class="stat-tile">
+    <div class="stat-label">Stații cunoscute</div>
+    <div class="stat-value">{{ host_total }}</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Ultima rulare</div>
+    <div class="stat-value stat-value-small">{{ run.started_at | fmt_dt }}</div>
+    <div class="stat-sub">Nivel {{ run.level }} · {{ run.ou_base }}</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Durată ultima rulare</div>
+    <div class="stat-value stat-value-small">{{ run.duration_sec | fmt_duration_sec }}</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Alerte critice</div>
+    <div class="stat-value {{ 'crit-number' if crit_alerts else '' }}">{{ crit_alerts | length }}</div>
+  </div>
+</div>
+
+<div class="grid-2col">
+  <section class="card">
+    <h2>Distribuție status — ultima rulare</h2>
+    <table class="mini-table">
+      <tbody>
+      {% for label, count in status_dist %}
+        <tr>
+          <td>{{ label }}</td>
+          <td class="num">{{ count }}</td>
+          <td class="bar-cell">
+            <div class="bar-track">
+              <div class="bar-fill status-{{ label | lower }}"
+                   style="width: {{ ((count / run.host_count * 100) if run.host_count else 0) | round(1) }}%"></div>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Distribuție versiuni OS</h2>
+    {% if os_dist %}
+    <table class="mini-table">
+      <tbody>
+      {% for row in os_dist %}
+        <tr><td>{{ row.os_caption }}</td><td class="num">{{ row.cnt }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">Fără date.</p>
+    {% endif %}
+  </section>
+</div>
+
+<div class="grid-2col">
+  <section class="card">
+    <h2>Top 10 stații cu spațiu redus (C:)</h2>
+    {% if top_disks %}
+    <table class="data-table compact">
+      <thead><tr><th>Stație</th><th>Disc</th><th class="num">Liber</th></tr></thead>
+      <tbody>
+      {% for d in top_disks %}
+        <tr>
+          <td><a href="{{ url_for('station_detail', name=d.name) }}">{{ d.name }}</a></td>
+          <td>{{ d.device_id }}</td>
+          <td class="num">{{ d.free_pct | fmt_pct }} <span class="muted">({{ d.free_mb | fmt_mb }} / {{ d.size_mb | fmt_mb }})</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">Fără date de disc în ultima rulare.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Alerte critice</h2>
+    {% if crit_alerts %}
+    <table class="data-table compact">
+      <thead><tr><th>Stație</th><th>Regulă</th><th>Mesaj</th></tr></thead>
+      <tbody>
+      {% for a in crit_alerts %}
+        <tr>
+          <td><a href="{{ url_for('station_detail', name=a.host_name) }}">{{ a.host_name }}</a></td>
+          <td><span class="badge badge-crit">{{ a.rule }}</span></td>
+          <td>{{ a.message }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">Nicio alertă critică în ultima rulare.</p>
+    {% endif %}
+    <a href="{{ url_for('alerte') }}" class="link-more">Toate alertele →</a>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

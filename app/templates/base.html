@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Sumar{% endblock %} — Inventar stații AD</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="{{ url_for('dashboard') }}">Inventar AD</a>
+    <nav class="mainnav">
+      <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">Sumar</a>
+      <a href="{{ url_for('stations') }}" class="{{ 'active' if request.endpoint == 'stations' else '' }}">Stații</a>
+      <a href="{{ url_for('software') }}" class="{{ 'active' if request.endpoint == 'software' else '' }}">Software</a>
+      <a href="{{ url_for('alerte') }}" class="{{ 'active' if request.endpoint == 'alerte' else '' }}">Alerte</a>
+      <a href="{{ url_for('rulari') }}" class="{{ 'active' if request.endpoint == 'rulari' else '' }}">Rulări</a>
+    </nav>
+    <div class="scan-widget">
+      <form id="scan-form" class="scan-form">
+        <select name="level" id="scan-level" title="Nivel de colectare">
+          <option value="1">Nivel 1</option>
+          <option value="2">Nivel 2</option>
+        </select>
+        <input type="text" name="ou_base" id="scan-ou" placeholder="OU (implicit: auto)">
+        <button type="submit" id="scan-start-btn">Pornește scanarea</button>
+        <button type="button" id="scan-stop-btn" class="btn-secondary" hidden>Oprește</button>
+      </form>
+      <div id="scan-progress" class="scan-progress" hidden>
+        <div class="scan-progress-track"><div class="scan-progress-fill" id="scan-progress-fill"></div></div>
+        <span id="scan-progress-text" class="scan-progress-text"></span>
+      </div>
+      <p id="scan-error" class="scan-error" hidden></p>
+    </div>
+  </div>
+</header>
+<main class="content">
+  {% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

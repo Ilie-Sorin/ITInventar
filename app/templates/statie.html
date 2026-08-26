@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}{{ host.name }}{% endblock %}
+{% block content %}
+<h1>{{ host.name }}</h1>
+<p class="subtitle">{{ host.ou_path or '—' }} · {{ host.ad_description or '' }}</p>
+
+<div class="grid-2col">
+  <section class="card">
+    <h2>Valori curente</h2>
+    {% if current %}
+    <table class="kv-table">
+      <tr><th>Status</th><td><span class="badge badge-{{ current.status | status_class }}">{{ current.status }}</span>
+        {% if current.error_message %}<span class="muted"> — {{ current.error_message }}</span>{% endif %}</td></tr>
+      <tr><th>Nivel colectare</th><td>{{ current.level }}</td></tr>
+      <tr><th>Model</th><td>{{ current.manufacturer or '—' }} {{ current.model or '' }}</td></tr>
+      <tr><th>Serie</th><td>{{ current.serial_number or '—' }}</td></tr>
+      <tr><th>BIOS</th><td>{{ current.bios_version or '—' }}</td></tr>
+      <tr><th>CPU</th><td>{{ current.cpu_name or '—' }}</td></tr>
+      <tr><th>RAM</th><td>{{ current.ram_total_mb | fmt_mb }}</td></tr>
+      <tr><th>OS</th><td>{{ current.os_caption or '—' }} ({{ current.os_build or '—' }}{% if current.os_display_version %}, {{ current.os_display_version }}{% endif %})</td></tr>
+      <tr><th>Arhitectură</th><td>{{ current.os_arch or '—' }}</td></tr>
+      <tr><th>Ultima pornire</th><td>{{ current.last_boot | fmt_dt }}</td></tr>
+      <tr><th>Uptime</th><td>{{ current.uptime_days | fmt_num }} zile</td></tr>
+      <tr><th>IP</th><td>{{ current.ip_address or '—' }}</td></tr>
+      <tr><th>MAC</th><td>{{ current.mac_address or '—' }}</td></tr>
+      <tr><th>DHCP</th><td>{{ 'da' if current.dhcp_enabled else 'nu' if current.dhcp_enabled is not none else '—' }}</td></tr>
+      <tr><th>Utilizator logat</th><td>{{ current.logged_on_user or '—' }}</td></tr>
+      <tr><th>Ultimul utilizator</th><td>{{ current.last_logged_on_user or '—' }}</td></tr>
+      <tr><th>Antivirus</th><td>
+        {% if current.av_name %}
+          {{ current.av_name }} —
+          {{ 'activ' if current.av_enabled else 'dezactivat' }},
+          {{ 'la zi' if current.av_up_to_date else 'semnături vechi' }}
+        {% else %}—{% endif %}
+      </td></tr>
+      <tr><th>Reboot în așteptare</th><td>
+        {% if current.level == 2 %}
+          {{ 'da' if current.reboot_pending else 'nu' }}
+        {% else %}
+          <span class="muted">indisponibil la Nivel 1</span>
+        {% endif %}
+      </td></tr>
+      <tr><th>Ultimă actualizare Windows</th><td>
+        {% if current.level == 2 %}{{ current.wu_last_success | fmt_dt }}{% else %}<span class="muted">indisponibil la Nivel 1</span>{% endif %}
+      </td></tr>
+      <tr><th>Colectat la</th><td>{{ current.collected_at | fmt_dt }}</td></tr>
+      <tr><th>Durată CIM / registry</th><td>{{ current.duration_cim_ms | fmt_ms_to_s }} / {% if current.level == 2 %}{{ current.duration_reg_ms | fmt_ms_to_s }}{% else %}<span class="muted">—</span>{% endif %}</td></tr>
+    </table>
+
+    {% if current_disks %}
+    <h3>Discuri</h3>
+    <table class="data-table compact">
+      <thead><tr><th>Unitate</th><th>Volum</th><th class="num">Total</th><th class="num">Liber</th></tr></thead>
+      <tbody>
+      {% for d in current_disks %}
+        <tr>
+          <td>{{ d.device_id }}</td>
+          <td>{{ d.volume_name or '—' }}</td>
+          <td class="num">{{ d.size_mb | fmt_mb }}</td>
+          <td class="num">{{ d.free_mb | fmt_mb }} ({{ d.free_pct | fmt_pct }})</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% else %}
+    <p class="empty-state">Nicio colectare încă pentru această stație.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Istoric spațiu liber — C:</h2>
+    {% if chart_points | length >= 2 %}
+    <div class="viz-root chart-wrap">
+      <svg viewBox="0 0 {{ chart_w }} {{ chart_h + 24 }}" class="disk-chart" role="img"
+           aria-label="Istoricul spațiului liber pe unitatea C, în procente">
+        <line x1="0" y1="{{ threshold_y }}" x2="{{ chart_w }}" y2="{{ threshold_y }}" class="chart-threshold-line" />
+        <text x="0" y="{{ threshold_y - 4 }}" class="chart-threshold-label" text-anchor="start">prag {{ disk_threshold }}%</text>
+        <polyline class="chart-line"
+          points="{% for p in chart_points %}{{ p.x }},{{ p.y }} {% endfor %}" />
+        {% for p in chart_points %}
+        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="3.5" class="chart-dot"
+                tabindex="0"
+                data-date="{{ p.date | fmt_dt }}" data-pct="{{ p.pct | fmt_pct }}" />
+        {% endfor %}
+        {% set last = chart_points[-1] %}
+        <text x="{{ last.x - 4 }}" y="{{ last.y - 8 }}" class="chart-end-label" text-anchor="end">{{ last.pct | fmt_pct }}</text>
+      </svg>
+      <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+    </div>
+    {% elif chart_points | length == 1 %}
+    <p class="empty-state">O singură măsurătoare până acum ({{ chart_points[0].pct | fmt_pct }}) — graficul apare de la a doua rulare.</p>
+    {% else %}
+    <p class="empty-state">Fără istoric de disc încă.</p>
+    {% endif %}
+
+    <h2>Alerte recente</h2>
+    {% if recent_alerts %}
+    <table class="data-table compact">
+      <thead><tr><th>Rulare</th><th>Regulă</th><th>Sev.</th><th>Mesaj</th></tr></thead>
+      <tbody>
+      {% for a in recent_alerts %}
+        <tr>
+          <td>{{ a.started_at | fmt_dt }}</td>
+          <td>{{ a.rule }}</td>
+          <td><span class="badge badge-{{ a.severity }}">{{ a.severity }}</span></td>
+          <td>{{ a.message }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">Nicio alertă înregistrată pentru această stație.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <h2>Software instalat {% if software_snapshot %}<span class="muted">(la {{ software_snapshot.collected_at | fmt_dt }})</span>{% endif %}</h2>
+  {% if software %}
+  <div class="table-scroll">
+  <table class="data-table compact">
+    <thead><tr><th>Nume</th><th>Versiune</th><th>Producător</th><th>Instalat</th><th>Scop</th></tr></thead>
+    <tbody>
+    {% for s in software %}
+      <tr>
+        <td><a href="{{ url_for('software', name=s.name, version=s.version or '') }}">{{ s.name }}</a></td>
+        <td>{{ s.version or '—' }}</td>
+        <td>{{ s.publisher or '—' }}</td>
+        <td>{{ s.install_date or '—' }}</td>
+        <td>{{ s.scope }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif current and current.level == 1 %}
+  <p class="empty-state"><span class="muted">indisponibil la Nivel 1</span></p>
+  {% else %}
+  <p class="empty-state">Fără date de software încă (necesită o colectare de Nivel 2).</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Toate snapshot-urile</h2>
+  <div class="table-scroll">
+  <table class="data-table compact">
+    <thead><tr><th>Colectat la</th><th>Nivel</th><th>Status</th><th>Eroare</th><th class="num">CIM</th><th class="num">Registry</th></tr></thead>
+    <tbody>
+    {% for s in status_history %}
+      <tr>
+        <td>{{ s.collected_at | fmt_dt }}</td>
+        <td>{{ s.level }}</td>
+        <td><span class="badge badge-{{ s.status | status_class }}">{{ s.status }}</span></td>
+        <td class="muted">{{ s.error_message or '' }}</td>
+        <td class="num">{{ s.duration_cim_ms | fmt_ms_to_s }}</td>
+        <td class="num">{% if s.level == 2 %}{{ s.duration_reg_ms | fmt_ms_to_s }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}
