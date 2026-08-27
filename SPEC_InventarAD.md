@@ -37,7 +37,9 @@ Aplicația trebuie deci să **măsoare și să expună aceste diferențe**, nu d
 - **Python 3 + Flask + SQLite** pentru aplicația web (fără ORM greu; `sqlite3` din stdlib
   este suficient).
 - Aplicația rulează **local, pe stația de administrare**, sub contul de administrator de
-  domeniu al operatorului. Se leagă **doar pe `127.0.0.1`**.
+  domeniu al operatorului. Leagă pe **`0.0.0.0:5057`** (paginile de consultare sunt vizibile
+  din alte PC-uri din rețea), dar `/scan`, `/scan/stop` și `/ous` rămân restricționate la
+  `127.0.0.1` (§8) — nicio parolă de admin AD nu circulă către alte stații.
 - Modul `ActiveDirectory` (RSAT) este disponibil pe stația de administrare.
 
 ---
@@ -132,9 +134,33 @@ param(
     [int]    $CimTimeoutSec = 45,
     [int]    $RegTimeoutSec = 60,
     [string[]] $ComputerName,               # opțional: listă explicită (pentru test)
-    [switch] $WhatIfDiscoveryOnly           # doar interogarea AD, fără contact cu stațiile
+    [switch] $WhatIfDiscoveryOnly,          # doar interogarea AD, fără contact cu stațiile
+    [System.Management.Automation.PSCredential] $Credential,  # opțional: cont AD, dacă diferă de sesiunea curentă
+    [switch] $ListOusOnly                   # doar listează OU-urile (DN + nr. stații), ajutor pentru -OuBase
 )
 ```
+
+`-Credential` e opțional și se folosește atât pentru interogările AD (`Get-ADComputer`,
+`Get-ADOrganizationalUnit`, `Get-ADDomain`) cât și pentru sesiunea CIM/DCOM
+(`New-CimSession -Credential ...`) — util când operatorul nu e logat pe stația de
+administrare cu contul de admin de domeniu.
+
+`-AdminUser <string>` e o alternativă la `-Credential`, gândită pentru apelul din
+`app/scanner.py` (mecanismul de elevare, §8): serverul web poate rula sub un cont
+obișnuit ("user pentru consultare"), iar operatorul dă separat, doar pentru o
+anumită scanare, un cont de admin AD ("admin pentru scanare"). Parola **nu** e
+argument de linie de comandă (ar rămâne vizibilă oricui inspectează procesul, ex.
+Task Manager / `Get-CimInstance Win32_Process`) — colectorul o citește o singură
+dată de pe STDIN, imediat la pornire, și construiește intern un `PSCredential`.
+`scanner.py` scrie parola pe stdin-ul subprocesului chiar după ce îl pornește.
+
+`-ListOusOnly` interoghează doar AD (fără contact cu stațiile, la fel ca
+`-WhatIfDiscoveryOnly`) și scrie pe stdout un tabel simplu `StatiiActive` / `DistinguishedName`
+pentru OU-ul de bază + fiecare sub-OU din subarbore, ca operatorul să aleagă DN-ul potrivit
+pentru `-OuBase`. Fără `-OuBase` explicit, se auto-detectează OU-ul stației curente (la fel
+ca la scanarea normală) — NU rădăcina domeniului, ca să nu parcurgă tot AD-ul pe domenii
+mari; pentru tot domeniul se dă explicit DN-ul rădăcinii ca `-OuBase`. Nu face parte din
+contractul NDJSON (nu produce JSON).
 
 Scrie pe **stdout** câte o linie JSON compactă per stație (`ConvertTo-Json -Compress -Depth 6`).
 Progresul și erorile merg pe **stderr**, în format `PROGRESS <done>/<total> <hostname>`, ca
@@ -451,7 +477,18 @@ Regulile care depind de registry (`reboot_pending`) se evaluează doar la rulăr
 
 ## 8. Aplicația web (Flask)
 
-Legare pe `127.0.0.1:5057`. Fără autentificare (pilot local, o singură persoană).
+Legare pe `0.0.0.0:5057` — vizibilă și din alte PC-uri din rețea, ca alte persoane să poată
+consulta datele fără să aibă acces la stația de administrare. Fără autentificare (pilot
+local, un singur operator care pornește scanări).
+
+Rutele `POST /scan`, `POST /scan/stop` și `GET /ous` sunt restricționate la `127.0.0.1`
+(`_restrict_sensitive_routes_to_localhost` din `webapp.py`, verificat prin `before_request`)
+— sunt singurele care pot porni/opri o scanare sau primi parola mecanismului de elevare
+(§5.1), iar fără HTTPS acea parolă nu trebuie să circule niciodată către alte stații din
+rețea. Restul rutelor (dashboard, `/statii`, `/statie/<name>`, `/software`, `/alerte`,
+`/rulari`, exporturile CSV, `/scan/status`) rămân accesibile de oriunde din rețea — conțin
+doar date de consultare, nicio acțiune și nicio credențială.
+
 Interfața este în **limba română**.
 
 ### Rute
@@ -462,10 +499,11 @@ Interfața este în **limba română**.
 | `GET /statii` | Tabel cu toate stațiile: nume, OU, model, OS + build, IP, ultimul user, spațiu liber C:, uptime, AV, status, ultima vedere. Sortabil pe orice coloană, căutare liberă, filtre pe OU / status / OS |
 | `GET /statie/<name>` | Fișa stației: valorile curente, istoricul spațiului liber (grafic simplu), istoricul statusurilor, lista de software (dacă există date de Nivel 2), toate snapshot-urile |
 | `GET /software` | Doar cu date de Nivel 2: agregare „produs + versiune → număr de stații", cu drill-down la lista de stații. Aici se vede imediat parcul neomogen (versiuni vechi de Zoom, Java, browsere) |
-| `GET /alerte` | Alertele ultimei rulări, grupate pe severitate, cu link la fișa stației |
+| `GET /alerte` | Alertele ultimei rulări, grupate pe severitate, cu link la fișa stației; `?rule=` opțional filtrează pe tipul de mesaj (regulă) |
 | `GET /rulari` | **Pagina de decizie a pilotului**: pentru fiecare rulare — nivel, durată totală, medie CIM, medie registry, rată de succes pe status. Plus un panou comparativ Nivel 1 vs. Nivel 2 (medii agregate pe fiecare nivel) |
-| `POST /scan` | Pornește o scanare: parametri `level` (1 sau 2) și `ou_base` opțional |
+| `POST /scan` | Pornește o scanare: parametri `level` (1 sau 2), `ou_base` opțional și, pentru mecanismul de elevare, `admin_user`/`admin_pass` opționale (dacă `admin_user` e dat, `admin_pass` e obligatoriu) |
 | `GET /scan/status` | JSON pentru polling: `{running, done, total, current_host, elapsed_sec, run_id}` |
+| `GET /ous` | Selectorul de OU din antet: `?ou_base=` opțional (gol = auto-detecție, ca la scanare); rulează colectorul cu `-ListOusOnly` și întoarce `{ous: [{dn, count}, ...]}` — primul element e mereu OU-ul de bază însuși. Independent de starea de scanare (nu ține lock-ul din `scanner.py`) |
 | `GET /export/statii.csv` | Export CSV al vederii curente (cu filtrele aplicate) |
 | `GET /export/software.csv` | Export CSV al agregării de software |
 

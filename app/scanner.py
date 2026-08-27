@@ -39,6 +39,10 @@ class ScanAlreadyRunningError(RuntimeError):
     """Ridicată când se cere pornirea unei scanări cât timp alta rulează deja."""
 
 
+class OuListError(RuntimeError):
+    """Ridicată când -ListOusOnly eșuează sau depășește timpul alocat."""
+
+
 def _prune_old_runs(conn, keep: int) -> None:
     """Păstrează doar cele mai recente `keep_runs` rulări (config.json §4) —
     șterge rândurile mai vechi din DB (CASCADE ia snapshots/alerts) și
@@ -102,10 +106,17 @@ class Scanner:
             state["elapsed_sec"] = round(time.time() - start_time, 1)
         return state
 
-    def start(self, level: int, ou_base: str | None = None) -> int:
+    def start(self, level: int, ou_base: str | None = None,
+              admin_user: str | None = None, admin_pass: str | None = None) -> int:
         """Pornește o scanare nouă într-un fir separat. Ridică
         ScanAlreadyRunningError dacă una e deja în curs — webapp.py o traduce
-        în răspuns HTTP 409."""
+        în răspuns HTTP 409.
+
+        admin_user/admin_pass sunt opționale: mecanismul de elevare (§8) —
+        serverul poate rula sub un cont obișnuit, iar operatorul dă separat,
+        doar pentru această scanare, un cont de admin AD. Nu sunt reținute în
+        self._state (care ajunge, prin get_status(), în răspunsul JSON al
+        /scan/status) — trăiesc doar cât durează apelul _run."""
         with self._lock:
             if self._state["running"]:
                 raise ScanAlreadyRunningError("O scanare este deja în curs.")
@@ -132,7 +143,8 @@ class Scanner:
             self._state["run_id"] = run_id
 
         self._thread = threading.Thread(
-            target=self._run, args=(run_id, level, ou_base, effective_ou, started_at, cfg),
+            target=self._run,
+            args=(run_id, level, ou_base, effective_ou, started_at, cfg, admin_user, admin_pass),
             daemon=True,
         )
         self._thread.start()
@@ -170,7 +182,7 @@ class Scanner:
                     self._state["current_host"] = hostname
         proc.stderr.close()
 
-    def _run(self, run_id, level, ou_base, effective_ou, started_at, cfg):
+    def _run(self, run_id, level, ou_base, effective_ou, started_at, cfg, admin_user=None, admin_pass=None):
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         ndjson_path = RUNS_DIR / f"run-{run_id}-{timestamp}.ndjson"
         meta_path = ndjson_path.with_suffix("").with_suffix(".meta.json")
@@ -201,18 +213,34 @@ class Scanner:
         ]
         if ou_base:
             args += ["-OuBase", ou_base]
+        if admin_user:
+            args += ["-AdminUser", admin_user]
 
         stderr_lines: list = []
         run_status = "completed"
         try:
             proc = subprocess.Popen(
                 args,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
                 cwd=str(BASE_DIR),
             )
             with self._lock:
                 self._process = proc
+
+            # Parola de elevare merge pe STDIN, NU ca argument de linie de
+            # comandă (ar rămâne vizibilă oricui inspectează procesul, ex.
+            # Task Manager) — collector-ul o citește o singură dată, la
+            # pornire, când vede -AdminUser (vezi Collect-Inventory.ps1).
+            if admin_user and admin_pass:
+                try:
+                    proc.stdin.write(admin_pass + "\n")
+                    proc.stdin.flush()
+                finally:
+                    proc.stdin.close()
+                    admin_pass = None  # nu o mai ținem în memorie decât cât e nevoie
+            else:
+                proc.stdin.close()
 
             stderr_thread = threading.Thread(
                 target=self._read_stderr, args=(proc, stderr_lines), daemon=True
@@ -266,3 +294,44 @@ class Scanner:
 # Instanță unică, importată de webapp.py — o singură scanare are sens pentru
 # un pilot local, un singur utilizator (§8).
 scanner = Scanner()
+
+
+def list_ous(ou_base: str | None = None) -> list[dict]:
+    """Rulează colectorul cu -ListOusOnly (doar interogări AD, fără contact cu
+    stațiile) și întoarce OU-ul de bază + sub-OU-urile lui direct sub-arbore,
+    cu DN și numărul de stații active — folosit de ruta /ous pentru selectorul
+    de OU din antet (căci fără el, operatorul ar trebui să afle DN-ul corect
+    manual din ADUC/PowerShell).
+
+    Independent de Scanner: nu ține lock-ul de scanare, pentru că nu atinge
+    nicio stație (doar AD) și poate rula chiar și cât timp o scanare CIM e
+    deja în desfășurare, fără să interfereze cu ea."""
+    args = [
+        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", str(COLLECTOR_PATH), "-ListOusOnly",
+    ]
+    if ou_base:
+        args += ["-OuBase", ou_base]
+
+    try:
+        proc = subprocess.run(
+            args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(BASE_DIR), timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        raise OuListError("Interogarea AD a durat prea mult (peste 30s).")
+
+    if proc.returncode != 0:
+        raise OuListError(proc.stderr.strip() or "Colectorul a eșuat la listarea OU-urilor.")
+
+    rows = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rows.append({"dn": obj.get("distinguished_name"), "count": obj.get("station_count")})
+    return rows

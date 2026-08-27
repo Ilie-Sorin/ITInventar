@@ -11,8 +11,12 @@ Constrângeri obligatorii pentru orice lucru pe acest proiect (detalii complete 
 - **PowerShell 5.1** pentru `collector/Collect-Inventory.ps1`, fără dependențe externe
   (native Windows PowerShell, nu PowerShell 7).
 - **Python 3 + Flask + `sqlite3` stdlib** pentru aplicația web (fără ORM greu).
-- Aplicația leagă **doar pe `127.0.0.1:5057`**, fără autentificare (pilot local, un singur
-  utilizator).
+- Aplicația leagă pe **`0.0.0.0:5057`** (vizibilă și din alte PC-uri din rețea, pentru
+  consultare), fără autentificare — dar rutele care pot porni/opri o scanare sau primi o
+  parolă de admin AD (`/scan`, `/scan/stop`, `/ous`) sunt restricționate explicit la
+  `127.0.0.1` în `webapp.py` (`_restrict_sensitive_routes_to_localhost`). Nu se relaxează
+  această restricție fără să se adauge și HTTPS/autentificare — altfel parola de admin AD
+  ar circula necriptat pe rețea.
 - Contractul dintre colector și web e **NDJSON pe stdout** (o linie JSON per stație),
   progres/erori pe stderr în format `PROGRESS <done>/<total> <hostname>`.
 - Interfața web este în **limba română**.

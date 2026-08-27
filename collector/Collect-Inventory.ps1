@@ -27,7 +27,19 @@ param(
     [int]      $CimTimeoutSec = 45,
     [int]      $RegTimeoutSec = 60,
     [string[]] $ComputerName,                # opțional: listă explicită (pentru test)
-    [switch]   $WhatIfDiscoveryOnly           # doar interogarea AD, fără contact cu stațiile
+    [switch]   $WhatIfDiscoveryOnly,          # doar interogarea AD, fără contact cu stațiile
+    [System.Management.Automation.PSCredential]
+               $Credential,                  # opțional: cont de admin AD, dacă diferă de sesiunea curentă
+                                              # (folosit atât pentru Get-ADComputer/Get-ADOrganizationalUnit,
+                                              # cât și pentru New-CimSession — vezi §5.2/§5.4 din spec)
+    [switch]   $ListOusOnly,                  # doar listează OU-urile disponibile (DN + nr. stații), ca
+                                               # ajutor la alegerea lui -OuBase; nu atinge nicio stație
+    [string]   $AdminUser                     # opțional: alternativă la -Credential pentru apelul din
+                                               # app/scanner.py — parola se citește de pe STDIN (o linie),
+                                               # NICIODATĂ ca argument de linie de comandă (ar rămâne vizibilă
+                                               # oricui vede command-line-ul procesului, ex. Task Manager /
+                                               # Get-CimInstance Win32_Process). Vezi construcția $Credential
+                                               # mai jos, imediat după deschiderea stdout/stderr.
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +61,23 @@ $stderr = New-Object System.IO.StreamWriter(
     (New-Object System.Text.UTF8Encoding($false))
 )
 $stderr.AutoFlush = $true
+
+if ($AdminUser -and -not $Credential) {
+    # Mecanism de elevare pentru app/scanner.py: operatorul poate porni
+    # serverul web cu un cont de domeniu obișnuit și totuși scana cu drepturi
+    # de admin AD, dând user+parolă separat doar pentru scanare (§8 — "admin
+    # pentru scanare, user pentru consultare"). Parola vine pe STDIN, scrisă
+    # de scanner.py imediat după pornirea acestui proces — NU ca argument de
+    # linie de comandă, care ar rămâne vizibil oricui inspectează procesul.
+    $plainPassword = [Console]::In.ReadLine()
+    if ($plainPassword) {
+        $securePassword = ConvertTo-SecureString -String $plainPassword -AsPlainText -Force
+        $Credential = New-Object System.Management.Automation.PSCredential($AdminUser, $securePassword)
+    }
+    # Golim variabila cât mai devreme — nu elimină 100% urma din memoria
+    # procesului, dar reduce fereastra în care parola în clar mai există undeva.
+    $plainPassword = $null
+}
 
 function Write-NdjsonLine {
     # O linie JSON compactă per stație — contractul NDJSON cu app/ingest.py.
@@ -112,14 +141,20 @@ function ConvertTo-AdInfo {
 function Get-TargetComputers {
     # Sursa listei de stații: fie interogarea OU-ului (calea normală), fie
     # lista explicită -ComputerName (test pe 3-5 stații, per §11 pasul 2).
-    param([string]$OuBase, [string[]]$ComputerNames)
+    param([string]$OuBase, [string[]]$ComputerNames, [System.Management.Automation.PSCredential]$Credential)
 
     $props = 'DNSHostName', 'OperatingSystem', 'OperatingSystemVersion', 'LastLogonDate', 'Description', 'whenCreated'
+    # -Credential e opțional: dacă operatorul nu e logat pe stația de administrare
+    # cu contul de admin de domeniu, îl poate da explicit aici, fără să schimbe
+    # sesiunea Windows curentă. Split în hashtable ca să nu trimitem un parametru
+    # $null explicit la cmdlet-urile AD (unele îl resping).
+    $adParams = @{}
+    if ($Credential) { $adParams['Credential'] = $Credential }
 
     if ($ComputerNames -and $ComputerNames.Count -gt 0) {
         foreach ($n in $ComputerNames) {
             try {
-                $c = Get-ADComputer -Identity $n -Properties $props -ErrorAction Stop
+                $c = Get-ADComputer -Identity $n -Properties $props @adParams -ErrorAction Stop
                 ConvertTo-AdInfo -Computer $c
             } catch {
                 $stderr.WriteLine("AVERTISMENT: '$n' nu a fost găsit în AD ($($_.Exception.Message)) — se încearcă direct pe nume.")
@@ -136,12 +171,49 @@ function Get-TargetComputers {
     if (-not $base) {
         # ou_base gol = auto-detecție: folosim OU-ul stației pe care rulează
         # aplicația (exact cum cere §4/§5.2 din spec).
-        $me = Get-ADComputer $env:COMPUTERNAME -ErrorAction Stop
+        $me = Get-ADComputer $env:COMPUTERNAME @adParams -ErrorAction Stop
         $base = $me.DistinguishedName -replace '^CN=[^,]+,', ''
     }
 
-    Get-ADComputer -SearchBase $base -SearchScope Subtree -Filter 'Enabled -eq $true' -Properties $props |
+    Get-ADComputer -SearchBase $base -SearchScope Subtree -Filter 'Enabled -eq $true' -Properties $props @adParams |
         ForEach-Object { ConvertTo-AdInfo -Computer $_ }
+}
+
+function Get-OuInventoryList {
+    <#
+        Listează OU-urile disponibile sub $Base (implicit rădăcina domeniului),
+        cu DistinguishedName și numărul de stații active (Enabled) direct sub
+        fiecare — ajutor pentru alegerea lui -OuBase la o rulare reală. Folosește
+        doar interogări AD (Get-ADOrganizationalUnit / Get-ADComputer), fără
+        niciun contact cu stațiile — la fel de "sigur" ca -WhatIfDiscoveryOnly.
+    #>
+    param([string]$Base, [System.Management.Automation.PSCredential]$Credential)
+
+    $adParams = @{}
+    if ($Credential) { $adParams['Credential'] = $Credential }
+
+    if (-not $Base) {
+        # Implicit: OU-ul stației curente, la fel ca auto-detecția din
+        # Get-TargetComputers — NU rădăcina domeniului, ca să nu parcurgă tot
+        # AD-ul (poate dura mult pe domenii mari). Pentru tot domeniul, se dă
+        # explicit -OuBase cu DN-ul rădăcinii.
+        $me = Get-ADComputer $env:COMPUTERNAME @adParams -ErrorAction Stop
+        $Base = $me.DistinguishedName -replace '^CN=[^,]+,', ''
+    }
+
+    $ous = @(Get-ADOrganizationalUnit -SearchBase $Base -SearchScope Subtree -Filter * -Properties DistinguishedName @adParams -ErrorAction Stop)
+    # Rădăcina ($Base) nu e ea însăși un obiect organizationalUnit dacă e chiar
+    # rădăcina domeniului — o includem manual, ca opțiune "tot domeniul/subarborele".
+    $allBases = @([PSCustomObject]@{ DistinguishedName = $Base }) + $ous
+
+    foreach ($ou in $allBases) {
+        $count = (Get-ADComputer -SearchBase $ou.DistinguishedName -SearchScope Subtree -Filter 'Enabled -eq $true' @adParams -ErrorAction Stop |
+            Measure-Object).Count
+        [PSCustomObject]@{
+            StatiiActive      = $count
+            DistinguishedName = $ou.DistinguishedName
+        }
+    }
 }
 
 function Test-Port445 {
@@ -196,15 +268,26 @@ function Resolve-CollectionStatus {
         Traduce o excepție CIM/DCOM într-unul din codurile de stare din §5.6.
         0x80070005 (E_ACCESSDENIED) și 0x800706BA (RPC server unavailable) sunt
         cele două HRESULT-uri enumerate explicit în spec pentru refuz de acces
-        sau firewall care blochează DCOM. Orice altă eroare merge la WMI_ERROR
-        ca fallback generic — mai bine un status vag decât unul greșit.
+        sau firewall care blochează DCOM.
+
+        Nu se poate conta mereu pe HResult-ul brut: uneori excepția reală
+        (COM/DCOM) e împachetată de .NET într-o excepție generică al cărei
+        HResult e codul generic COR_E_EXCEPTION (0x80131500), nu HRESULT-ul
+        Win32 original — motiv verificat direct în teren (acces refuzat pe o
+        stație unde contul care rula colectorul nu era admin local). De-asta
+        se verifică ȘI textul mesajului ("Access is denied"), nu doar hex-ul.
+
+        Orice altă eroare merge la WMI_ERROR ca fallback generic — mai bine
+        un status vag decât unul greșit.
     #>
     param($Exception)
     # -band cu 0xFFFFFFFF izolează cei mai puțin semnificativi 32 de biți: HResult
     # e un Int32 (adesea negativ ca semn), iar PowerShell îl lărgește la Int64 cu
     # sign-extension înainte de -band, deci masca readuce valoarea pe 32 de biți.
     $hex = '0x{0:X8}' -f ($Exception.HResult -band 0xFFFFFFFF)
-    if ($hex -in @('0x80070005', '0x800706BA')) { return 'RPC_DENIED' }
+    if ($hex -in @('0x80070005', '0x800706BA') -or $Exception.Message -match '(?i)access\s+is\s+denied') {
+        return 'RPC_DENIED'
+    }
     if ($Exception.Message -match '(?i)time(d)?\s*-?out' -or $hex -eq '0x80338029') { return 'TIMEOUT' }
     return 'WMI_ERROR'
 }
@@ -517,7 +600,8 @@ function Invoke-StationCollection {
         [int]       $Level,
         [int]       $TcpProbeTimeoutMs,
         [int]       $CimTimeoutSec,
-        [int]       $RegTimeoutSec
+        [int]       $RegTimeoutSec,
+        [System.Management.Automation.PSCredential] $Credential
     )
 
     $record = @{
@@ -550,7 +634,16 @@ function Invoke-StationCollection {
     $cimSw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $opt = New-CimSessionOption -Protocol Dcom
-        $session = New-CimSession -ComputerName $name -SessionOption $opt -OperationTimeoutSec $CimTimeoutSec -ErrorAction Stop
+        $sessionParams = @{
+            ComputerName        = $name
+            SessionOption       = $opt
+            OperationTimeoutSec = $CimTimeoutSec
+            ErrorAction         = 'Stop'
+        }
+        # -Credential opțional: contul de admin AD dat la linia de comandă, dacă
+        # diferă de sesiunea Windows curentă (vezi -Credential la nivelul scriptului).
+        if ($Credential) { $sessionParams['Credential'] = $Credential }
+        $session = New-CimSession @sessionParams
 
         # Probă de conectivitate reală: New-CimSession peste DCOM nu garantează
         # mereu validarea imediată a canalului — primul query efectiv e cel care
@@ -611,7 +704,27 @@ function Invoke-StationCollection {
 # ---------------------------------------------------------------------------
 
 try {
-    $computers = @(Get-TargetComputers -OuBase $OuBase -ComputerNames $ComputerName)
+    if ($ListOusOnly) {
+        # Mod separat de descoperire, pentru operator SAU pentru aplicația web
+        # (ruta /ous, folosită de selectorul de OU din antet): listează
+        # OU-ul de bază + sub-OU-urile lui, cu DN și nr. de stații active,
+        # ca să se aleagă -OuBase la rularea reală. O linie JSON compactă
+        # per OU pe stdout — schemă proprie (distinguished_name/station_count),
+        # DISTINCTĂ de NDJSON-ul de stații; nu face parte din contractul cu
+        # app/ingest.py, dar e tot JSON ca să poată fi parsată programatic.
+        Get-OuInventoryList -Base $OuBase -Credential $Credential |
+            Sort-Object DistinguishedName |
+            ForEach-Object {
+                $line = [ordered]@{
+                    distinguished_name = $_.DistinguishedName
+                    station_count      = $_.StatiiActive
+                } | ConvertTo-Json -Compress
+                $stdout.WriteLine($line)
+            }
+        exit 0
+    }
+
+    $computers = @(Get-TargetComputers -OuBase $OuBase -ComputerNames $ComputerName -Credential $Credential)
     $total = $computers.Count
 
     if ($WhatIfDiscoveryOnly) {
@@ -663,10 +776,10 @@ try {
             $ps = [powershell]::Create()
             $ps.RunspacePool = $pool
             [void]$ps.AddScript({
-                param($AdInfo, $Level, $TcpMs, $CimSec, $RegSec)
+                param($AdInfo, $Level, $TcpMs, $CimSec, $RegSec, $Cred)
                 Invoke-StationCollection -AdInfo $AdInfo -Level $Level `
-                    -TcpProbeTimeoutMs $TcpMs -CimTimeoutSec $CimSec -RegTimeoutSec $RegSec
-            }).AddArgument($ad).AddArgument($Level).AddArgument($TcpProbeTimeoutMs).AddArgument($CimTimeoutSec).AddArgument($RegTimeoutSec)
+                    -TcpProbeTimeoutMs $TcpMs -CimTimeoutSec $CimSec -RegTimeoutSec $RegSec -Credential $Cred
+            }).AddArgument($ad).AddArgument($Level).AddArgument($TcpProbeTimeoutMs).AddArgument($CimTimeoutSec).AddArgument($RegTimeoutSec).AddArgument($Credential)
 
             $jobs.Add([PSCustomObject]@{
                 Pipeline = $ps

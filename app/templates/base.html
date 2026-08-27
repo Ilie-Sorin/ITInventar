@@ -23,7 +23,26 @@
           <option value="1">Nivel 1</option>
           <option value="2">Nivel 2</option>
         </select>
-        <input type="text" name="ou_base" id="scan-ou" placeholder="OU (implicit: auto)">
+        <div class="ou-picker-wrap">
+          <input type="text" name="ou_base" id="scan-ou" placeholder="OU (implicit: auto)">
+          <button type="button" id="ou-picker-toggle" class="btn-secondary" title="Alege OU din AD">Alege OU…</button>
+          <div id="ou-picker-panel" class="ou-picker-panel" hidden>
+            <p class="ou-picker-hint">
+              Click pe un sub-OU ca să intri în el; „Selectează” alege OU-ul afișat ca bază de scanare.
+            </p>
+            <div id="ou-picker-breadcrumb" class="ou-picker-breadcrumb"></div>
+            <div id="ou-picker-current-card" class="ou-current-card"></div>
+            <div id="ou-picker-list" class="ou-picker-list"></div>
+            <p id="ou-picker-error" class="scan-error" hidden></p>
+          </div>
+        </div>
+        <div class="scan-elevate-wrap">
+          <button type="button" id="elevate-toggle" class="link-more">Alt cont AD…</button>
+          <div id="elevate-fields" class="elevate-fields" hidden>
+            <input type="text" id="scan-admin-user" placeholder="DOMENIU\user" autocomplete="off">
+            <input type="password" id="scan-admin-pass" placeholder="Parolă" autocomplete="new-password">
+          </div>
+        </div>
         <button type="submit" id="scan-start-btn">Pornește scanarea</button>
         <button type="button" id="scan-stop-btn" class="btn-secondary" hidden>Oprește</button>
       </form>

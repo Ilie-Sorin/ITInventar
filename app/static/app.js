@@ -60,21 +60,51 @@
     pollTimer = setInterval(poll, 1500);
   }
 
+  // ---------------------------------------------------------------------
+  // Elevare: cont AD separat pentru scanare (§8) — ascuns implicit, pentru
+  // cazul obișnuit când serverul rulează deja sub un cont cu drepturi.
+  // ---------------------------------------------------------------------
+  var elevateToggle = document.getElementById("elevate-toggle");
+  var elevateFields = document.getElementById("elevate-fields");
+  var adminUserInput = document.getElementById("scan-admin-user");
+  var adminPassInput = document.getElementById("scan-admin-pass");
+
+  if (elevateToggle && elevateFields) {
+    elevateToggle.addEventListener("click", function (evt) {
+      evt.stopPropagation();
+      elevateFields.hidden = !elevateFields.hidden;
+    });
+    elevateFields.addEventListener("click", function (evt) { evt.stopPropagation(); });
+    document.addEventListener("click", function () {
+      elevateFields.hidden = true;
+    });
+  }
+
   if (form) {
     form.addEventListener("submit", function (evt) {
       evt.preventDefault();
       clearError();
       var level = document.getElementById("scan-level").value;
       var ouBase = document.getElementById("scan-ou").value.trim();
+      var payload = { level: parseInt(level, 10), ou_base: ouBase };
+      var adminUser = adminUserInput ? adminUserInput.value.trim() : "";
+      var adminPass = adminPassInput ? adminPassInput.value : "";
+      if (adminUser) {
+        payload.admin_user = adminUser;
+        payload.admin_pass = adminPass;
+      }
       fetch("/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ level: parseInt(level, 10), ou_base: ouBase }),
+        body: JSON.stringify(payload),
       })
         .then(function (r) {
           return r.json().then(function (data) { return { ok: r.ok, data: data }; });
         })
         .then(function (result) {
+          // Parola nu rămâne în formular mai mult decât e nevoie, indiferent
+          // de rezultat — o singură folosire, mereu retastată dacă mai e nevoie.
+          if (adminPassInput) adminPassInput.value = "";
           if (!result.ok) {
             showError(result.data.error || "Nu s-a putut porni scanarea.");
             return;
@@ -82,7 +112,10 @@
           wasRunning = true;
           startPolling();
         })
-        .catch(function () { showError("Eroare de rețea la pornirea scanării."); });
+        .catch(function () {
+          if (adminPassInput) adminPassInput.value = "";
+          showError("Eroare de rețea la pornirea scanării.");
+        });
     });
   }
 
@@ -96,6 +129,188 @@
   // pagina în timpul unei scanări pornite anterior, widgetul trebuie să
   // reflecte starea reală, nu să pretindă că nimic nu rulează.
   startPolling();
+
+  // ---------------------------------------------------------------------
+  // Selector de OU (ruta /ous — rulează colectorul cu -ListOusOnly, doar
+  // interogări AD, fără contact cu stațiile) — operatorul altfel ar trebui
+  // să afle DN-ul corect manual din ADUC/PowerShell.
+  // ---------------------------------------------------------------------
+  var ouInput = document.getElementById("scan-ou");
+  var ouToggle = document.getElementById("ou-picker-toggle");
+  var ouPanel = document.getElementById("ou-picker-panel");
+  var ouBreadcrumb = document.getElementById("ou-picker-breadcrumb");
+  var ouCurrentCard = document.getElementById("ou-picker-current-card");
+  var ouListBox = document.getElementById("ou-picker-list");
+  var ouError = document.getElementById("ou-picker-error");
+
+  if (ouToggle && ouPanel) {
+
+    function ouTrail(dn) {
+      // Reconstruiește lanțul de la rădăcina domeniului până la dn, ca
+      // breadcrumb navigabil — mult mai clar decât un singur buton "Urcă",
+      // pentru că arată dintr-o privire tot drumul, nu doar pasul următor.
+      if (!dn) return [];
+      var parts = dn.split(",");
+      var dcStart = parts.length;
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].trim().indexOf("OU=") !== 0) { dcStart = i; break; }
+      }
+      var rootDn = parts.slice(dcStart).join(",");
+      var ouSegs = parts.slice(0, dcStart).slice().reverse();
+      var trail = [{ label: "Domeniu", dn: rootDn }];
+      var cumulative = rootDn;
+      ouSegs.forEach(function (seg) {
+        cumulative = seg + "," + cumulative;
+        trail.push({ label: seg.replace(/^OU=/, ""), dn: cumulative });
+      });
+      return trail;
+    }
+
+    function renderBreadcrumb(dn) {
+      ouBreadcrumb.innerHTML = "";
+      var trail = ouTrail(dn);
+      trail.forEach(function (step, idx) {
+        if (idx > 0) {
+          var sep = document.createElement("span");
+          sep.className = "ou-breadcrumb-sep";
+          sep.textContent = "›";
+          ouBreadcrumb.appendChild(sep);
+        }
+        var isLast = idx === trail.length - 1;
+        if (isLast) {
+          var current = document.createElement("span");
+          current.className = "ou-breadcrumb-current";
+          current.textContent = step.label;
+          current.title = step.dn;
+          ouBreadcrumb.appendChild(current);
+        } else {
+          var link = document.createElement("button");
+          link.type = "button";
+          link.className = "ou-breadcrumb-link";
+          link.textContent = step.label;
+          link.title = step.dn;
+          link.addEventListener("click", function () { loadOus(step.dn); });
+          ouBreadcrumb.appendChild(link);
+        }
+      });
+    }
+
+    function renderCurrentCard(dn, count) {
+      ouCurrentCard.innerHTML = "";
+      var info = document.createElement("span");
+      info.className = "ou-current-info";
+      info.innerHTML = (count === null || count === undefined ? "" : "<strong>" + count + " stații</strong> în ") +
+        "acest OU";
+      info.title = dn || "";
+
+      var selectBtn = document.createElement("button");
+      selectBtn.type = "button";
+      selectBtn.className = "ou-current-select";
+      selectBtn.textContent = "Selectează acest OU";
+      selectBtn.addEventListener("click", function () {
+        ouInput.value = dn;
+        ouPanel.hidden = true;
+      });
+
+      ouCurrentCard.appendChild(info);
+      ouCurrentCard.appendChild(selectBtn);
+    }
+
+    function renderChildren(children) {
+      ouListBox.innerHTML = "";
+      if (children.length === 0) {
+        ouListBox.innerHTML = '<p class="empty-state">Niciun sub-OU aici.</p>';
+        return;
+      }
+      var subHeading = document.createElement("p");
+      subHeading.className = "ou-list-heading";
+      subHeading.textContent = "Sub-OU-uri:";
+      ouListBox.appendChild(subHeading);
+
+      children.forEach(function (row) {
+        var el = document.createElement("div");
+        el.className = "ou-row";
+        el.title = "Click pentru a intra în " + row.dn;
+
+        var label = document.createElement("span");
+        label.className = "ou-row-dn";
+        // Doar ultimul segment (numele OU-ului), pentru lizibilitate — DN-ul
+        // complet rămâne disponibil ca tooltip și e folosit intern la selecție.
+        var shortName = (row.dn.match(/^OU=([^,]+)/) || [null, row.dn])[1];
+        label.textContent = shortName;
+
+        var count = document.createElement("span");
+        count.className = "ou-row-count";
+        count.textContent = row.count + " stații";
+
+        var selectBtn = document.createElement("button");
+        selectBtn.type = "button";
+        selectBtn.className = "btn-secondary ou-row-select";
+        selectBtn.textContent = "Selectează";
+        selectBtn.addEventListener("click", function (evt) {
+          evt.stopPropagation();
+          ouInput.value = row.dn;
+          ouPanel.hidden = true;
+        });
+
+        el.appendChild(label);
+        el.appendChild(count);
+        el.appendChild(selectBtn);
+        // Click oriunde pe rând (în afara butonului Selectează) = intră în acel OU.
+        el.addEventListener("click", function () { loadOus(row.dn); });
+
+        ouListBox.appendChild(el);
+      });
+    }
+
+    function loadOus(baseDn) {
+      ouError.hidden = true;
+      ouCurrentCard.innerHTML = "";
+      ouListBox.innerHTML = '<p class="empty-state">Se încarcă…</p>';
+      var url = "/ous" + (baseDn ? "?ou_base=" + encodeURIComponent(baseDn) : "");
+      fetch(url)
+        .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+        .then(function (result) {
+          if (!result.ok) {
+            ouListBox.innerHTML = "";
+            ouError.textContent = result.data.error || "Nu s-au putut încărca OU-urile.";
+            ouError.hidden = false;
+            return;
+          }
+          var rows = result.data.ous;
+          // Primul rând întors de /ous e mereu OU-ul de bază însuși (§ colector,
+          // Get-OuInventoryList) — restul sunt sub-OU-uri directe.
+          var resolvedBase = rows.length > 0 ? rows[0].dn : baseDn;
+          var resolvedCount = rows.length > 0 ? rows[0].count : null;
+          renderBreadcrumb(resolvedBase);
+          renderCurrentCard(resolvedBase, resolvedCount);
+          renderChildren(rows.slice(1));
+        })
+        .catch(function () {
+          ouListBox.innerHTML = "";
+          ouError.textContent = "Eroare de rețea la interogarea AD.";
+          ouError.hidden = false;
+        });
+    }
+
+    ouToggle.addEventListener("click", function (evt) {
+      evt.stopPropagation();
+      var willOpen = ouPanel.hidden;
+      ouPanel.hidden = !willOpen;
+      if (willOpen) {
+        // Pornim de la ce e deja scris în câmp (dacă operatorul a editat
+        // manual un DN), altfel de la auto-detecția OU-ului curent.
+        loadOus(ouInput.value.trim() || null);
+      }
+    });
+
+    ouPanel.addEventListener("click", function (evt) { evt.stopPropagation(); });
+
+    // Click oriunde în afara panoului îl închide.
+    document.addEventListener("click", function () {
+      ouPanel.hidden = true;
+    });
+  }
 
   // ---------------------------------------------------------------------
   // Tooltip pentru graficul de disc (fișa stației)

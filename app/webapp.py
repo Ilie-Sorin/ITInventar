@@ -2,8 +2,13 @@
 webapp.py — aplicația Flask a pilotului: pornește scanări, afișează inventarul,
 alertele și pagina de decizie Nivel 1 vs. Nivel 2.
 
-Leagă strict pe 127.0.0.1:5057, fără autentificare — pilot local, un singur
-utilizator (§8). Interfața e în limba română.
+Leagă pe toate interfețele (0.0.0.0:5057), fără autentificare — pilot local,
+un singur operator, dar cu pagini de consultare vizibile și din alte PC-uri
+din rețea (§8). Rutele care pot porni o scanare sau primi o parolă de admin AD
+(`/scan`, `/scan/stop`, `/ous`) rămân restricționate explicit la 127.0.0.1 —
+vezi `_restrict_sensitive_routes_to_localhost` mai jos — altfel acea parolă
+ar circula necriptat (HTTP simplu) către oricine ajunge la server din rețea.
+Interfața e în limba română.
 """
 
 import csv
@@ -17,10 +22,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import alerts as alerts_module  # noqa: E402
 import db  # noqa: E402
 import ingest  # noqa: E402
-from scanner import ScanAlreadyRunningError, scanner  # noqa: E402
+from scanner import OuListError, ScanAlreadyRunningError, list_ous, scanner  # noqa: E402
 
 app = Flask(__name__)
 db.init_db()
+
+# Endpoint-uri care pot porni/opri o scanare sau interoga direct AD — separate
+# de paginile de consultare, care rămân vizibile din toată rețeaua. Numele
+# sunt cele implicite Flask (numele funcției), nu URL-urile.
+_LOCAL_ONLY_ENDPOINTS = {"start_scan", "stop_scan", "ous"}
+
+
+@app.before_request
+def _restrict_sensitive_routes_to_localhost():
+    """Serverul ascultă acum pe toate interfețele, ca alte PC-uri din rețea să
+    poată consulta datele — dar pornirea unei scanări (care poate primi o
+    parolă de admin AD, trimisă necriptat) și selectorul de OU rămân utilizabile
+    doar de pe stația însăși."""
+    if request.endpoint in _LOCAL_ONLY_ENDPOINTS and request.remote_addr not in ("127.0.0.1", "::1"):
+        abort(403)
 
 
 # ---------------------------------------------------------------------------
@@ -428,20 +448,35 @@ def software():
 def alerte():
     conn = get_db()
     run = get_latest_run(conn)
+    rule_filter = request.args.get("rule", "").strip()
+
     grouped = {"crit": [], "warn": [], "info": []}
     if run:
-        rows = conn.execute(
-            """
+        sql = """
             SELECT a.*, h.name AS host_name FROM alerts a
             JOIN hosts h ON h.id = a.host_id
             WHERE a.run_id = ?
-            ORDER BY h.name COLLATE NOCASE
-            """,
-            (run["id"],),
-        ).fetchall()
+        """
+        params = [run["id"]]
+        if rule_filter:
+            sql += " AND a.rule = ?"
+            params.append(rule_filter)
+        sql += " ORDER BY h.name COLLATE NOCASE"
+        rows = conn.execute(sql, params).fetchall()
         for r in rows:
             grouped.setdefault(r["severity"], []).append(r)
-    return render_template("alerte.html", run=run, grouped=grouped)
+
+    # Catalogul de reguli pentru filtru: toate regulile văzute vreodată (nu doar
+    # în ultima rulare), ca opțiunea aleasă să rămână valabilă și dacă rularea
+    # curentă întâmplător n-are nicio alertă de acel tip.
+    rule_options = [r[0] for r in conn.execute(
+        "SELECT DISTINCT rule FROM alerts ORDER BY rule"
+    ).fetchall()]
+
+    return render_template(
+        "alerte.html", run=run, grouped=grouped,
+        rule_filter=rule_filter, rule_options=rule_options,
+    )
 
 
 @app.route("/rulari")
@@ -478,8 +513,18 @@ def start_scan():
 
     ou_base = (data.get("ou_base") or "").strip() or None
 
+    # Mecanism de elevare (§8): cont de admin AD opțional, dat separat doar
+    # pentru această scanare — permite pornirea serverului sub un cont
+    # obișnuit ("user pentru consultare") și totuși scanare cu drepturi de
+    # admin ("admin pentru scanare"). Nu se loghează, nu se persistă nicăieri —
+    # scanner._run() le trimite pe stdin colectorului și le uită imediat.
+    admin_user = (data.get("admin_user") or "").strip() or None
+    admin_pass = data.get("admin_pass") or None
+    if admin_user and not admin_pass:
+        return jsonify({"error": "Lipsește parola pentru contul de admin dat."}), 400
+
     try:
-        run_id = scanner.start(level, ou_base)
+        run_id = scanner.start(level, ou_base, admin_user, admin_pass)
     except ScanAlreadyRunningError as exc:
         return jsonify({"error": str(exc)}), 409
 
@@ -495,6 +540,19 @@ def stop_scan():
 @app.route("/scan/status")
 def scan_status():
     return jsonify(scanner.get_status())
+
+
+@app.route("/ous")
+def ous():
+    """Selectorul de OU din antet: fără ou_base, arată OU-ul curent + sub-OU-uri
+    (auto-detecție, ca la o scanare fără -OuBase); cu ou_base, drill-down în
+    acel subarbore. Nu ține de Scanner — poate rula și cu o scanare în curs."""
+    ou_base = (request.args.get("ou_base") or "").strip() or None
+    try:
+        rows = list_ous(ou_base)
+    except OuListError as exc:
+        return jsonify({"error": str(exc)}), 502
+    return jsonify({"ous": rows})
 
 
 # ---------------------------------------------------------------------------
@@ -542,4 +600,4 @@ def export_software_csv():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5057, debug=False)
+    app.run(host="0.0.0.0", port=5057, debug=False)

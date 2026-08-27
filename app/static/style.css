@@ -97,7 +97,127 @@ h3 { font-size: 13px; margin: 16px 0 6px; color: var(--text-secondary); }
   color: var(--text);
   font-size: 13px;
 }
-.scan-form input[type="text"] { width: 150px; }
+.scan-form input[type="text"] { width: 260px; }
+
+/* ---------- Selector de OU (ruta /ous) ---------- */
+
+.ou-picker-wrap { position: relative; display: inline-flex; gap: 6px; }
+
+.ou-picker-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 420px;
+  max-width: 90vw;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 4px 16px rgba(20, 20, 19, 0.16);
+  z-index: 30;
+  text-align: left;
+}
+.ou-picker-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+
+.ou-picker-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ou-breadcrumb-link {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ou-breadcrumb-link:hover { text-decoration: underline; }
+.ou-breadcrumb-current { font-weight: 700; padding: 2px 4px; }
+.ou-breadcrumb-sep { color: var(--text-muted); }
+
+.ou-current-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.ou-current-select {
+  background: var(--accent);
+  color: #fff;
+  padding: 4px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.ou-current-select:hover { background: var(--accent-ink); }
+
+.ou-list-heading {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin: 0 0 4px;
+}
+.ou-picker-list { display: flex; flex-direction: column; gap: 4px; }
+.ou-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ou-row:hover { background: var(--surface-hover); }
+.ou-row-dn { flex: 1; overflow-wrap: anywhere; }
+.ou-row-count { color: var(--text-muted); white-space: nowrap; }
+.ou-row-select { padding: 3px 8px; font-size: 11px; font-weight: 500; }
+
+/* ---------- Elevare: cont AD separat pentru scanare ---------- */
+
+.scan-elevate-wrap { position: relative; display: inline-flex; }
+#elevate-toggle { font-size: 12px; white-space: nowrap; }
+.elevate-fields {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 4px 16px rgba(20, 20, 19, 0.16);
+  z-index: 30;
+}
+.elevate-fields input {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  width: 180px;
+}
 
 .scan-progress { width: 100%; display: flex; align-items: center; gap: 8px; }
 .scan-progress-track {

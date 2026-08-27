@@ -13,6 +13,10 @@ logs/*.log
 __pycache__/
 *.pyc
 
+# Wheel-uri descărcate manual pentru instalare fără proxy pe stația de domeniu
+# (vezi runbook-ul de instalare) — binare, nu fac parte din sursa proiectului
+vendor_wheels/
+
 # Editor/OS
 .vscode/
 .idea/

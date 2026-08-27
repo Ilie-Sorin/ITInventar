@@ -8,6 +8,17 @@
 {% else %}
 <p class="subtitle">Ultima rulare: {{ run.started_at | fmt_dt }} (Nivel {{ run.level }})</p>
 
+<form method="get" class="filter-row">
+  <select name="rule">
+    <option value="">Toate tipurile de mesaj</option>
+    {% for r in rule_options %}
+    <option value="{{ r }}" {{ 'selected' if r == rule_filter else '' }}>{{ r }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filtrează</button>
+  <a class="btn-secondary" href="{{ url_for('alerte') }}">Resetează</a>
+</form>
+
 {% for severity, title in [('crit', 'Critice'), ('warn', 'Avertismente'), ('info', 'Informative')] %}
 <section class="card">
   <h2><span class="badge badge-{{ severity }}">{{ title }}</span> <span class="muted">({{ grouped[severity] | length }})</span></h2>
@@ -26,7 +37,10 @@
     </tbody>
   </table>
   {% else %}
-  <p class="empty-state">Nicio alertă {{ title | lower }} în ultima rulare.</p>
+  <p class="empty-state">
+    {% if rule_filter %}Nicio alertă {{ title | lower }} cu acest filtru.
+    {% else %}Nicio alertă {{ title | lower }} în ultima rulare.{% endif %}
+  </p>
   {% endif %}
 </section>
 {% endfor %}
