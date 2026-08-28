@@ -1,0 +1,134 @@
+====================================================================
+  INVENTAR STAȚII AD — ghid rapid de pornire (versiune pilot/test)
+====================================================================
+
+Acest pachet conține o aplicație web locală pentru inventarierea
+stațiilor dintr-un OU de Active Directory (hardware, OS, software
+instalat, antivirus, alerte). Rulează direct pe calculatorul tău —
+nu se instalează nimic pe stațiile inventariate.
+
+Ești unul dintre cei 2-3 testeri ai acestei versiuni pilot — la
+final ai o secțiune "Ce ne interesează ca feedback", te rog s-o
+citești.
+
+
+1) CE ÎȚI TREBUIE ÎNAINTE SĂ PORNEȘTI
+--------------------------------------------------------------------
+  a) Windows 10/11, calculator membru al domeniului AD (necesar doar
+     dacă vrei să PORNEȘTI o scanare — pentru simpla consultare a
+     unor date deja adunate de altcineva nu ai nevoie de domeniu).
+
+  b) Python instalat — dacă nu ai deja Python pe calculator:
+       - descarcă de pe https://www.python.org/downloads/
+       - la instalare, bifează OBLIGATORIU "Add python.exe to PATH"
+       - recomandat: Python 3.11 (64-bit) — cu el, instalarea
+         pachetelor din pasul 3 se face complet FĂRĂ internet.
+         Orice altă versiune 3.x merge și ea, dar are nevoie de
+         internet la prima pornire (pachetele se iau atunci direct
+         de pe internet).
+
+  c) Doar dacă vei porni scanări: modulul PowerShell "Active
+     Directory" (parte din RSAT). Verifici/instalezi așa — deschide
+     PowerShell CA ADMINISTRATOR și rulează:
+
+       Get-Module -ListAvailable ActiveDirectory
+
+     Dacă nu apare nimic, instalează-l cu:
+
+       Add-WindowsCapability -Online -Name "Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"
+
+     (Poate cere un restart. Dacă PC-ul e gestionat central și nu ai
+     drepturi de instalare, cere-i administratorului de rețea.)
+
+
+2) PORNIREA APLICAȚIEI
+--------------------------------------------------------------------
+  Dublu-click pe fișierul:
+
+       pornire.bat
+
+  La prima rulare durează puțin mai mult (pregătește automat un
+  mediu Python local și instalează pachetele necesare) — la
+  rulările următoare pornește în câteva secunde.
+
+  Se deschide o fereastră neagră cu mesaje de progres, apoi
+  automat, în browser, adresa:
+
+       http://localhost:5057
+
+  NU ÎNCHIDE fereastra neagră cât timp folosești aplicația — ea
+  ține serverul pornit. Când termini, apasă CTRL+C în acea
+  fereastră (sau pur și simplu închide fereastra).
+
+  Dacă Windows Firewall întreabă dacă permite acces pentru Python —
+  apasă "Permite acces" (altfel aplicația nu răspunde în browser).
+
+
+3) PRIMA SCANARE
+--------------------------------------------------------------------
+  Din antetul paginii poți alege OU-ul de scanat și nivelul:
+    - Nivel 1: date de bază (hardware, OS, rețea, disc, antivirus) —
+      rapid.
+    - Nivel 2: Nivel 1 + software instalat, ultimul utilizator,
+      reboot în așteptare — mai lent, dar mult mai complet. Pentru
+      un test relevant, pornește măcar o dată o scanare de Nivel 2.
+
+  Dacă contul cu care ai pornit aplicația nu are deja drepturi de
+  admin pe stațiile țintă, poți da separat un cont de admin AD doar
+  pentru acea scanare (nu se salvează nicăieri, se folosește o
+  singură dată).
+
+  După ce scanarea rulează, rezultatele apar live în pagina
+  "Stații"; poți compara Nivel 1 vs Nivel 2 în pagina "Rulări".
+
+
+4) CUM PRIMEȘTI O VERSIUNE ACTUALIZATĂ
+--------------------------------------------------------------------
+  Vei primi din când în când un arhivă (.zip) nouă. Când o
+  despachetezi peste instalarea existentă:
+
+    PĂSTREAZĂ (nu suprascrie) — sunt datele tale locale:
+       inventar.db, config.json, folderele runs\ și logs\,
+       folderul venv\ (dacă există deja)
+
+    SUPRASCRIE — sunt codul aplicației:
+       folderele app\ și collector\, fișierele requirements.txt,
+       pornire.bat, CITESTE-MA.txt, vendor_wheels\
+
+  După actualizare, rulează din nou pornire.bat — verifică singur
+  dacă mai are ceva nou de instalat și actualizează automat
+  structura bazei de date, fără să piardă istoricul deja adunat.
+
+
+5) CE NE INTERESEAZĂ CA FEEDBACK
+--------------------------------------------------------------------
+  Asta e o versiune pilot — scopul principal al testului tău e să
+  identificăm ce lipsește sau ce nu e clar, nu doar dacă merge.
+  Ne interesează în special:
+
+    - Ce informație ai căutat și n-ai găsit-o (sau a fost greu de
+      găsit) în interfață.
+    - Orice alertă care ți s-a părut greșită sau derutantă (ex. o
+      alertă care nu corespunde realității de pe teren).
+    - Funcționalități pe care le-ai aștepta și lipsesc.
+    - Orice pas din instalare/pornire care nu a fost clar sau a
+      eșuat — te rog trimite mesajul exact de eroare, dacă a fost
+      unul.
+
+  Trimite feedback-ul către: ____________________ (completează aici)
+
+
+6) LIMITĂRI CUNOSCUTE (nu sunt bug-uri)
+--------------------------------------------------------------------
+  - "Software instalat per utilizator" arată doar utilizatorii
+    LOGAȚI în momentul scanării — un profil delogat nu are datele
+    de registry accesibile de la distanță (limitare Windows, nu a
+    aplicației).
+  - Antivirus: decodarea stării (activ/la zi) e best-effort, pe o
+    schemă nedocumentată oficial de Microsoft — foarte fiabilă în
+    practică, dar nu 100% garantată.
+  - Aplicația nu are autentificare — oricine din rețeaua locală
+    poate consulta datele (dar nu poate porni scanări sau vedea
+    parole — acele acțiuni merg doar de pe calculatorul tău).
+
+  Detalii tehnice complete: SPEC_InventarAD.md, în același folder.

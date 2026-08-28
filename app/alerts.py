@@ -60,7 +60,7 @@ def evaluate_run(conn, run_id: int) -> int:
         host_id = snap["host_id"]
         new_alerts.extend(_check_disk_low(conn, run_id, host_id, snap, cfg))
         new_alerts.extend(_check_uptime_high(run_id, host_id, snap, cfg))
-        new_alerts.extend(_check_av(run_id, host_id, snap, cfg, now))
+        new_alerts.extend(_check_av(conn, run_id, host_id, snap, cfg, now))
         new_alerts.extend(_check_os_unsupported(run_id, host_id, snap, cfg))
         new_alerts.extend(_check_not_seen(run_id, host_id, snap, cfg, now))
         new_alerts.extend(_check_collect_failed(conn, run_id, host_id, snap))
@@ -105,28 +105,62 @@ def _check_uptime_high(run_id, host_id, snap, cfg):
     return [(run_id, host_id, "uptime_high", "warn", msg, f"{uptime:.1f}")]
 
 
-def _check_av(run_id, host_id, snap, cfg, now):
+def _check_av(conn, run_id, host_id, snap, cfg, now):
     # Doar pentru stații care au răspuns efectiv — la OFFLINE/RPC_DENIED lipsa
     # datelor AV e o consecință a eșecului de colectare, nu o problemă de AV.
     if snap["status"] not in ("OK", "PARTIAL"):
         return []
 
-    if not snap["av_name"]:
+    # Se pot raporta MAI MULTE produse AV simultan (ex. Windows Defender +
+    # Bitdefender Endpoint Security Tools) — Windows dezactivează de regulă
+    # protecția Defender-ului când alt AV preia rolul, dar Defender rămâne
+    # înregistrat ca produs "dezactivat" în Security Center. De-asta evaluăm
+    # pe LISTA completă din snapshot_antivirus, nu pe un singur produs: altfel
+    # am fi putut declanșa av_disabled fals pentru un Defender rezidual cât
+    # timp AV-ul terț chiar protejează stația.
+    rows = conn.execute(
+        "SELECT name, enabled, up_to_date, signature_date FROM snapshot_antivirus WHERE snapshot_id = ?",
+        (snap["id"],),
+    ).fetchall()
+    products = [dict(r) for r in rows]
+
+    if not products:
+        # Compatibilitate cu snapshot-uri ingerate înainte de introducerea
+        # tabelei snapshot_antivirus (sau cu un colector mai vechi) — ne
+        # întoarcem la coloana scalară unică a snapshot-ului.
+        if snap["av_name"]:
+            products = [{
+                "name": snap["av_name"], "enabled": snap["av_enabled"],
+                "up_to_date": snap["av_up_to_date"], "signature_date": snap["av_signature_date"],
+            }]
+
+    if not products:
         return [(run_id, host_id, "av_missing", "crit",
                  "Niciun produs antivirus raportat", None)]
 
     out = []
-    if snap["av_enabled"] == 0:
+    enabled_products = [p for p in products if p["enabled"]]
+    if not enabled_products:
+        names = ", ".join(p["name"] for p in products if p["name"]) or "necunoscut"
         out.append((run_id, host_id, "av_disabled", "crit",
-                     f"{snap['av_name']}: protecția în timp real este dezactivată", snap["av_name"]))
+                     f"Protecția în timp real este dezactivată la toate produsele AV raportate ({names})", names))
 
-    sig_date = _parse_dt(snap["av_signature_date"])
+    # Prospețimea semnăturilor contează doar pentru produsele ACTIVE — dacă un
+    # AV e oricum dezactivat, semnăturile lui vechi nu mai sunt relevante, iar
+    # cazul "niciun AV activ" e deja acoperit de av_disabled mai sus.
     max_age = cfg.get("av_signature_age_days_max", 7)
-    if sig_date is not None:
+    stale = []
+    for p in enabled_products:
+        sig_date = _parse_dt(p["signature_date"])
+        if sig_date is None:
+            continue
         age_days = (now - sig_date).total_seconds() / 86400.0
         if age_days > max_age:
-            msg = f"Semnături antivirus vechi de {age_days:.1f} zile (prag {max_age})"
-            out.append((run_id, host_id, "av_stale", "warn", msg, f"{age_days:.1f}"))
+            stale.append((p["name"], age_days))
+    if stale:
+        worst_name, worst_age = max(stale, key=lambda t: t[1])
+        msg = f"Semnături antivirus vechi de {worst_age:.1f} zile la {worst_name or 'AV activ'} (prag {max_age})"
+        out.append((run_id, host_id, "av_stale", "warn", msg, f"{worst_age:.1f}"))
     return out
 
 

@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     dhcp_enabled        INTEGER,
     logged_on_user      TEXT,
     last_logged_on_user TEXT,
+    logged_on_user_display_name      TEXT,   -- DisplayName din AD pentru logged_on_user (§5.7)
+    last_logged_on_user_display_name TEXT,   -- idem, pentru last_logged_on_user
     av_name             TEXT,
     av_enabled          INTEGER,
     av_up_to_date       INTEGER,
@@ -102,6 +104,15 @@ CREATE TABLE IF NOT EXISTS snapshot_disks (
     free_pct     REAL
 );
 
+CREATE TABLE IF NOT EXISTS snapshot_antivirus (
+    id             INTEGER PRIMARY KEY,
+    snapshot_id    INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    name           TEXT,
+    enabled        INTEGER,
+    up_to_date     INTEGER,
+    signature_date TEXT
+);
+
 CREATE TABLE IF NOT EXISTS snapshot_software (
     id           INTEGER PRIMARY KEY,
     snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
@@ -109,7 +120,8 @@ CREATE TABLE IF NOT EXISTS snapshot_software (
     version      TEXT,
     publisher    TEXT,
     install_date TEXT,
-    scope        TEXT               -- 'machine' | 'machine_x86'
+    scope        TEXT,              -- 'machine' | 'machine_x86' | 'user'
+    user_name    TEXT               -- numele contului, doar când scope = 'user' (§5.5f)
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
@@ -167,12 +179,31 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+# Coloane adăugate după lansarea inițială a schemei — CREATE TABLE IF NOT EXISTS
+# de mai sus nu le adaugă pe o bază deja existentă, așa că se migrează explicit
+# aici, o singură dată, verificând întâi dacă lipsesc (PRAGMA table_info).
+_MIGRATIONS = [
+    ("snapshot_software", "user_name", "TEXT"),
+    ("snapshots", "logged_on_user_display_name", "TEXT"),
+    ("snapshots", "last_logged_on_user_display_name", "TEXT"),
+]
+
+
+def _migrate_schema(conn) -> None:
+    for table, column, coltype in _MIGRATIONS:
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+    conn.commit()
+
+
 def init_db() -> None:
     """Creează schema dacă lipsește. Idempotent — sigur de rulat la fiecare pornire."""
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
         conn.commit()
+        _migrate_schema(conn)
     finally:
         conn.close()
 

@@ -24,13 +24,24 @@
       <tr><th>IP</th><td>{{ current.ip_address or '—' }}</td></tr>
       <tr><th>MAC</th><td>{{ current.mac_address or '—' }}</td></tr>
       <tr><th>DHCP</th><td>{{ 'da' if current.dhcp_enabled else 'nu' if current.dhcp_enabled is not none else '—' }}</td></tr>
-      <tr><th>Utilizator logat</th><td>{{ current.logged_on_user or '—' }}</td></tr>
-      <tr><th>Ultimul utilizator</th><td>{{ current.last_logged_on_user or '—' }}</td></tr>
+      <tr><th>Utilizator logat</th><td>
+        {% if current.logged_on_user %}
+          {{ current.logged_on_user_display_name or current.logged_on_user }}
+          {% if current.logged_on_user_display_name %}<span class="muted"> ({{ current.logged_on_user }})</span>{% endif %}
+        {% else %}—{% endif %}
+      </td></tr>
+      <tr><th>Ultimul utilizator</th><td>
+        {% if current.last_logged_on_user %}
+          {{ current.last_logged_on_user_display_name or current.last_logged_on_user }}
+          {% if current.last_logged_on_user_display_name %}<span class="muted"> ({{ current.last_logged_on_user }})</span>{% endif %}
+        {% else %}—{% endif %}
+      </td></tr>
       <tr><th>Antivirus</th><td>
         {% if current.av_name %}
           {{ current.av_name }} —
           {{ 'activ' if current.av_enabled else 'dezactivat' }},
           {{ 'la zi' if current.av_up_to_date else 'semnături vechi' }}
+          {% if current_antivirus | length > 1 %}<span class="muted"> (+{{ current_antivirus | length - 1 }} alt(e) produs(e) — vezi mai jos)</span>{% endif %}
         {% else %}—{% endif %}
       </td></tr>
       <tr><th>Reboot în așteptare</th><td>
@@ -58,6 +69,25 @@
           <td>{{ d.volume_name or '—' }}</td>
           <td class="num">{{ d.size_mb | fmt_mb }}</td>
           <td class="num">{{ d.free_mb | fmt_mb }} ({{ d.free_pct | fmt_pct }})</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if current_antivirus | length > 1 %}
+    <h3>Produse antivirus detectate</h3>
+    <p class="subtitle">Mai multe produse înregistrate simultan — de regulă normal când un AV terț
+      preia rolul și Windows Defender rămâne înregistrat, dar dezactivat (vezi §5.4 din spec).</p>
+    <table class="data-table compact">
+      <thead><tr><th>Nume</th><th>Protecție activă</th><th>Semnături</th><th>Dată semnătură</th></tr></thead>
+      <tbody>
+      {% for av in current_antivirus %}
+        <tr>
+          <td>{{ av.name or '—' }}</td>
+          <td>{% if av.enabled %}<span class="badge badge-ok">activ</span>{% else %}<span class="badge badge-crit">dezactivat</span>{% endif %}</td>
+          <td>{{ 'la zi' if av.up_to_date else 'vechi' }}</td>
+          <td>{{ av.signature_date | fmt_dt }}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -116,13 +146,13 @@
 </div>
 
 <section class="card">
-  <h2>Software instalat {% if software_snapshot %}<span class="muted">(la {{ software_snapshot.collected_at | fmt_dt }})</span>{% endif %}</h2>
-  {% if software %}
+  <h2>Software instalat (mașină) {% if software_snapshot %}<span class="muted">(la {{ software_snapshot.collected_at | fmt_dt }})</span>{% endif %}</h2>
+  {% if software_machine %}
   <div class="table-scroll">
   <table class="data-table compact">
     <thead><tr><th>Nume</th><th>Versiune</th><th>Producător</th><th>Instalat</th><th>Scop</th></tr></thead>
     <tbody>
-    {% for s in software %}
+    {% for s in software_machine %}
       <tr>
         <td><a href="{{ url_for('software', name=s.name, version=s.version or '') }}">{{ s.name }}</a></td>
         <td>{{ s.version or '—' }}</td>
@@ -138,6 +168,33 @@
   <p class="empty-state"><span class="muted">indisponibil la Nivel 1</span></p>
   {% else %}
   <p class="empty-state">Fără date de software încă (necesită o colectare de Nivel 2).</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Software instalat per utilizator {% if software_snapshot %}<span class="muted">(la {{ software_snapshot.collected_at | fmt_dt }})</span>{% endif %}</h2>
+  <p class="subtitle">Doar utilizatorii logați la momentul scanării (profilele offline nu au hive-ul de registry montat — vezi §5.5f din spec).</p>
+  {% if software_user %}
+  <div class="table-scroll">
+  <table class="data-table compact">
+    <thead><tr><th>Utilizator</th><th>Nume</th><th>Versiune</th><th>Producător</th><th>Instalat</th></tr></thead>
+    <tbody>
+    {% for s in software_user %}
+      <tr>
+        <td>{{ s.user_name or '—' }}</td>
+        <td><a href="{{ url_for('software', name=s.name, version=s.version or '') }}">{{ s.name }}</a></td>
+        <td>{{ s.version or '—' }}</td>
+        <td>{{ s.publisher or '—' }}</td>
+        <td>{{ s.install_date or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif current and current.level == 1 %}
+  <p class="empty-state"><span class="muted">indisponibil la Nivel 1</span></p>
+  {% else %}
+  <p class="empty-state">Niciun software per utilizator găsit (fie nimeni logat la scanare, fie utilizatorii logați nu au nimic instalat doar pentru ei).</p>
   {% endif %}
 </section>
 

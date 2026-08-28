@@ -60,7 +60,7 @@
       <td>{{ r.model or '—' }}</td>
       <td>{{ r.os_caption or '—' }}{% if r.os_build %} ({{ r.os_build }}){% endif %}</td>
       <td>{{ r.ip_address or '—' }}</td>
-      <td>{{ r.logged_on_user or r.last_logged_on_user or '—' }}</td>
+      <td>{{ r.logged_on_user_display_name or r.last_logged_on_user_display_name or r.logged_on_user or r.last_logged_on_user or '—' }}</td>
       <td class="num">{{ r.c_free_pct | fmt_pct }}</td>
       <td class="num">{{ r.uptime_days | fmt_num }}</td>
       <td>

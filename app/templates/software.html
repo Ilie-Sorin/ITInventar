@@ -10,7 +10,7 @@
   <a class="link-more" href="{{ url_for('software') }}">← Înapoi la toate produsele</a>
   {% if drilldown_hosts %}
   <table class="data-table compact">
-    <thead><tr><th>Stație</th><th>OU</th><th>Producător</th><th>Instalat</th><th>Scop</th></tr></thead>
+    <thead><tr><th>Stație</th><th>OU</th><th>Producător</th><th>Instalat</th><th>Scop</th><th>Utilizator</th></tr></thead>
     <tbody>
     {% for h in drilldown_hosts %}
       <tr>
@@ -19,6 +19,7 @@
         <td>{{ h.publisher or '—' }}</td>
         <td>{{ h.install_date or '—' }}</td>
         <td>{{ h.scope }}</td>
+        <td>{{ h.user_name or '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>

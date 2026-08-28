@@ -218,6 +218,16 @@ hexazecimal pe 6 cifre; octetul din mijloc indică dacă protecția în timp rea
 ultimul octet dacă semnăturile sunt la zi. Rezultatul se salvează în două câmpuri booleene
 `av_enabled` / `av_up_to_date`, plus `av_signature_date` din `timestamp`.
 
+**Mai multe produse AV simultan**: `AntiVirusProduct` poate întoarce MAI MULTE rezultate — ex.
+Windows Defender + un AV terță parte (Bitdefender Endpoint Security Tools etc.). Windows
+dezactivează de regulă protecția în timp real a Defender-ului când alt AV preia rolul, dar
+Defender rămâne înregistrat ca produs "dezactivat" în Security Center. Se colectează ÎNTREAGA
+listă (`antivirus_all` în NDJSON, tabela `snapshot_antivirus`), nu doar primul rezultat —
+altfel regula `av_disabled` (§7) ar putea declanșa fals pe baza unui Defender rezidual dezactivat,
+cât timp AV-ul terț chiar protejează stația. Câmpul `antivirus` (singular) rămâne pentru
+compatibilitate cu coloanele simple din UI/CSV: e produsul cel mai relevant din listă (activ,
+apoi cu semnături la zi), ales de colector.
+
 > **INTERZIS: `Win32_Product`.** Declanșează reconfigurare MSI pe stația țintă și durează
 > minute. Softul instalat se citește exclusiv din registry, la Nivel 2.
 
@@ -263,6 +273,25 @@ Se **exclud** intrările fără `DisplayName`, cele cu `SystemComponent = 1` și
 `SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install` →
 `LastSuccessTime`.
 
+**f) Software instalat per utilizator** — instalări care scriu doar în hive-ul
+utilizatorului (HKEY_CURRENT_USER), invizibile la blocul (a). `StdRegProv` nu poate adresa
+HKEY_CURRENT_USER de la distanță (n-are sens fără o sesiune interactivă), dar poate adresa
+direct `HKEY_USERS` (`hDefKey = 2147483651` / `0x80000003`), unde hive-ul (`NTUSER.DAT`) al
+fiecărui utilizator LOGAT apare ca subcheie `HKEY_USERS\<SID>`. Se citește:
+1. `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList` din HKLM — mapează
+   `SID -> ProfileImagePath`, ca să rezolvăm numele de utilizator (folder-ul din
+   `C:\Users\...`); funcționează indiferent dacă hive-ul e încărcat sau nu.
+2. Subcheile de sub `HKEY_USERS` — se exclud `.DEFAULT`, conturile de serviciu
+   `S-1-5-18/19/20` și cele terminate în `_Classes`; rămân doar SID-uri `S-1-5-21-...`.
+3. Pentru fiecare SID rămas: `<SID>\Software\Microsoft\Windows\CurrentVersion\Uninstall`,
+   cu aceleași reguli de excludere ca la blocul (a) (fără `DisplayName`, `SystemComponent = 1`,
+   `ParentKeyName` prezent).
+
+**LIMITARE CUNOSCUTĂ**: doar utilizatorii logați la momentul scanării au hive-ul montat sub
+`HKEY_USERS` — un profil offline nu apare. Nu există o cale read-only de a citi un profil
+offline fără să-l montăm noi (ceea ce ar fi o scriere pe stația țintă, interzisă). Documentat
+explicit și în UI (`/statie/<name>`).
+
 Enumerarea softului este partea cea mai costisitoare (zeci de subchei × 4 valori). Se
 măsoară **separat** durata blocului registry (`duration_reg_ms`) față de blocul CIM
 (`duration_cim_ms`) — exact acesta e numărul care fundamentează decizia Nivel 1 vs. Nivel 2.
@@ -307,7 +336,8 @@ măsoară **separat** durata blocului registry (`duration_reg_ms`) față de blo
     "serial_number": "CZC1234ABC", "bios_version": "S05 Ver. 02.14.00",
     "cpu_name": "Intel(R) Core(TM) i5-10500",
     "ram_total_mb": 16384,
-    "logged_on_user": "DOMENIU\\popescu.ion"
+    "logged_on_user": "DOMENIU\\popescu.ion",
+    "logged_on_user_display_name": "Popescu Ion"
   },
   "os": {
     "caption": "Microsoft Windows 11 Pro", "build": "26100",
@@ -319,13 +349,22 @@ măsoară **separat** durata blocului registry (`duration_reg_ms`) față de blo
   },
   "network": { "ip_address": "10.20.3.114", "mac_address": "A4:BB:6D:...", "dhcp_enabled": true },
   "disks": [ { "device_id": "C:", "volume_name": "Windows", "size_mb": 476000, "free_mb": 38200 } ],
-  "antivirus": { "name": "Windows Defender", "enabled": true, "up_to_date": true,
+  "antivirus": { "name": "Bitdefender Endpoint Security Tools", "enabled": true, "up_to_date": true,
                  "signature_date": "2026-08-26T04:10:00+03:00" },
+  "antivirus_all": [
+    { "name": "Bitdefender Endpoint Security Tools", "enabled": true, "up_to_date": true,
+      "signature_date": "2026-08-26T04:10:00+03:00" },
+    { "name": "Windows Defender", "enabled": false, "up_to_date": false, "signature_date": null }
+  ],
   "registry": {
     "last_logged_on_user": "DOMENIU\\popescu.ion",
+    "last_logged_on_user_display_name": "Popescu Ion",
     "reboot_pending": false,
     "wu_last_success": "2026-08-14T03:12:00+03:00",
-    "software": [ { "name": "Zoom Workplace", "version": "6.5.1", "publisher": "Zoom", "install_date": "2026-08-21", "scope": "machine" } ]
+    "software": [
+      { "name": "Zoom Workplace", "version": "6.5.1", "publisher": "Zoom", "install_date": "2026-08-21", "scope": "machine", "user": null },
+      { "name": "Slack", "version": "4.39.0", "publisher": "Slack Technologies", "install_date": "2026-07-02", "scope": "user", "user": "popescu.ion" }
+    ]
   }
 }
 ```
@@ -399,7 +438,9 @@ CREATE TABLE snapshots (
     dhcp_enabled        INTEGER,
     logged_on_user      TEXT,
     last_logged_on_user TEXT,
-    av_name             TEXT,
+    logged_on_user_display_name      TEXT,   -- DisplayName din AD (Resolve-UserDisplayName, §5.7)
+    last_logged_on_user_display_name TEXT,
+    av_name             TEXT,               -- produsul AV cel mai relevant — vezi §5.4 "mai multe produse AV"
     av_enabled          INTEGER,
     av_up_to_date       INTEGER,
     av_signature_date   TEXT,
@@ -418,6 +459,15 @@ CREATE TABLE snapshot_disks (
     free_pct     REAL
 );
 
+CREATE TABLE snapshot_antivirus (
+    id             INTEGER PRIMARY KEY,
+    snapshot_id    INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    name           TEXT,
+    enabled        INTEGER,
+    up_to_date     INTEGER,
+    signature_date TEXT
+);
+
 CREATE TABLE snapshot_software (
     id           INTEGER PRIMARY KEY,
     snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
@@ -425,7 +475,8 @@ CREATE TABLE snapshot_software (
     version      TEXT,
     publisher    TEXT,
     install_date TEXT,
-    scope        TEXT               -- 'machine' | 'machine_x86'
+    scope        TEXT,              -- 'machine' | 'machine_x86' | 'user'
+    user_name    TEXT               -- numele contului, doar când scope = 'user' (§5.5f)
 );
 
 CREATE TABLE alerts (
@@ -463,8 +514,8 @@ vin din `config.json`.
 | `disk_low` | orice disc cu `free_pct < disk_free_pct_min` | crit sub 5%, altfel warn |
 | `uptime_high` | `uptime_days > uptime_days_max` | warn |
 | `av_missing` | niciun produs AV raportat | crit |
-| `av_disabled` | `av_enabled = 0` | crit |
-| `av_stale` | `av_signature_date` mai veche de `av_signature_age_days_max` | warn |
+| `av_disabled` | NICIUNUL dintre produsele AV raportate nu are protecția în timp real activă (§5.4, nota despre multi-AV) | crit |
+| `av_stale` | printre produsele AV ACTIVE, cel puțin unul are semnăturile mai vechi de `av_signature_age_days_max` | warn |
 | `reboot_pending` | `reboot_pending = 1` în toate rulările din ultimele `reboot_pending_days_max` zile | warn |
 | `os_unsupported` | `os_build` în lista `unsupported_os_builds` | warn |
 | `not_seen` | `hosts.last_seen` mai veche de `not_seen_days_max` zile | warn |
@@ -497,7 +548,7 @@ Interfața este în **limba română**.
 |---|---|
 | `GET /` | Dashboard: numărul de stații, distribuția pe status din ultima rulare, alerte critice, distribuția pe versiuni de OS, top 10 stații cu spațiu redus |
 | `GET /statii` | Tabel cu toate stațiile: nume, OU, model, OS + build, IP, ultimul user, spațiu liber C:, uptime, AV, status, ultima vedere. Sortabil pe orice coloană, căutare liberă, filtre pe OU / status / OS |
-| `GET /statie/<name>` | Fișa stației: valorile curente, istoricul spațiului liber (grafic simplu), istoricul statusurilor, lista de software (dacă există date de Nivel 2), toate snapshot-urile |
+| `GET /statie/<name>` | Fișa stației: valorile curente, istoricul spațiului liber (grafic simplu), istoricul statusurilor, lista de software — separat pe mașină și pe utilizator (§5.5f, dacă există date de Nivel 2) —, toate snapshot-urile |
 | `GET /software` | Doar cu date de Nivel 2: agregare „produs + versiune → număr de stații", cu drill-down la lista de stații. Aici se vede imediat parcul neomogen (versiuni vechi de Zoom, Java, browsere) |
 | `GET /alerte` | Alertele ultimei rulări, grupate pe severitate, cu link la fișa stației; `?rule=` opțional filtrează pe tipul de mesaj (regulă) |
 | `GET /rulari` | **Pagina de decizie a pilotului**: pentru fiecare rulare — nivel, durată totală, medie CIM, medie registry, rată de succes pe status. Plus un panou comparativ Nivel 1 vs. Nivel 2 (medii agregate pe fiecare nivel) |

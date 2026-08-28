@@ -158,7 +158,10 @@ _STATION_SORT_COLUMNS = {
     "model": "s.model",
     "os": "s.os_caption",
     "ip": "s.ip_address",
-    "user": "COALESCE(NULLIF(s.logged_on_user, ''), s.last_logged_on_user)",
+    "user": """COALESCE(
+        NULLIF(s.logged_on_user_display_name, ''), NULLIF(s.last_logged_on_user_display_name, ''),
+        NULLIF(s.logged_on_user, ''), s.last_logged_on_user
+    )""",
     "disk": "c_free_pct",
     "uptime": "s.uptime_days",
     "av": "s.av_name",
@@ -177,7 +180,8 @@ def query_stations(conn, search=None, ou=None, status=None, os_filter=None,
             h.id AS host_id, h.name, h.ou_path, h.ad_description, h.last_seen,
             s.id AS snapshot_id, s.run_id, s.status, s.error_message,
             s.manufacturer, s.model, s.os_caption, s.os_build, s.os_display_version,
-            s.ip_address, s.logged_on_user, s.last_logged_on_user, s.uptime_days,
+            s.ip_address, s.logged_on_user, s.last_logged_on_user,
+            s.logged_on_user_display_name, s.last_logged_on_user_display_name, s.uptime_days,
             s.av_name, s.av_enabled, s.av_up_to_date, s.level, s.collected_at,
             d.free_pct AS c_free_pct, d.free_mb AS c_free_mb, d.size_mb AS c_size_mb
         FROM hosts h
@@ -244,7 +248,7 @@ def query_software_hosts(conn, name, version):
                 ORDER BY s2.collected_at DESC, s2.id DESC LIMIT 1
             )
         )
-        SELECT h.name, h.ou_path, sw.publisher, sw.install_date, sw.scope
+        SELECT h.name, h.ou_path, sw.publisher, sw.install_date, sw.scope, sw.user_name
         FROM snapshot_software sw
         JOIN latest_l2 l ON l.snapshot_id = sw.snapshot_id
         JOIN hosts h ON h.id = l.host_id
@@ -352,9 +356,14 @@ def station_detail(name):
     ).fetchone()
 
     current_disks = []
+    current_antivirus = []
     if current:
         current_disks = conn.execute(
             "SELECT * FROM snapshot_disks WHERE snapshot_id = ? ORDER BY device_id",
+            (current["id"],),
+        ).fetchall()
+        current_antivirus = conn.execute(
+            "SELECT * FROM snapshot_antivirus WHERE snapshot_id = ? ORDER BY name COLLATE NOCASE",
             (current["id"],),
         ).fetchall()
 
@@ -389,12 +398,19 @@ def station_detail(name):
             """,
             (host["id"],),
         ).fetchone()
+    software_machine = []
+    software_user = []
     if software_snapshot:
         software = conn.execute(
-            "SELECT name, version, publisher, install_date, scope FROM snapshot_software "
+            "SELECT name, version, publisher, install_date, scope, user_name FROM snapshot_software "
             "WHERE snapshot_id = ? ORDER BY name COLLATE NOCASE",
             (software_snapshot["id"],),
         ).fetchall()
+        # Despărțim aici (nu în template) softul mașinii de cel per utilizator —
+        # sunt surse de date diferite (HKLM vs. hive-ul fiecărui profil logat,
+        # §5.5f) și au sens ca secțiuni separate în UI.
+        software_machine = [s for s in software if s["scope"] != "user"]
+        software_user = [s for s in software if s["scope"] == "user"]
 
     recent_alerts = conn.execute(
         """
@@ -420,8 +436,10 @@ def station_detail(name):
 
     return render_template(
         "statie.html", host=host, current=current, current_disks=current_disks,
+        current_antivirus=current_antivirus,
         disk_history=disk_history, status_history=status_history,
-        software=software, software_snapshot=software_snapshot, recent_alerts=recent_alerts,
+        software=software, software_machine=software_machine, software_user=software_user,
+        software_snapshot=software_snapshot, recent_alerts=recent_alerts,
         chart_points=chart_points, chart_w=chart_w, chart_h=chart_h,
         disk_threshold=disk_threshold, threshold_y=threshold_y,
     )
@@ -586,7 +604,9 @@ def export_stations_csv():
                            os_filter or None, sort, direction)
 
     fieldnames = ["name", "ou_path", "model", "os_caption", "os_build", "ip_address",
-                  "logged_on_user", "last_logged_on_user", "c_free_pct", "uptime_days",
+                  "logged_on_user", "last_logged_on_user",
+                  "logged_on_user_display_name", "last_logged_on_user_display_name",
+                  "c_free_pct", "uptime_days",
                   "av_name", "av_enabled", "status", "last_seen"]
     return _csv_response(fieldnames, (dict(r) for r in rows), "statii.csv")
 

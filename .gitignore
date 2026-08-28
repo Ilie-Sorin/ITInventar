@@ -13,9 +13,17 @@ logs/*.log
 __pycache__/
 *.pyc
 
+# Mediul virtual creat local de pornire.bat la prima rulare — se recreează
+# oricând din requirements.txt / vendor_wheels, nu face parte din sursă.
+venv/
+
 # Wheel-uri descărcate manual pentru instalare fără proxy pe stația de domeniu
 # (vezi runbook-ul de instalare) — binare, nu fac parte din sursa proiectului
 vendor_wheels/
+
+# Pachetul .zip pregătit pentru testeri (regenerabil, vezi pornire.bat/
+# CITESTE-MA.txt) — nu se versionează, e un artefact de distribuție.
+dist/
 
 # Editor/OS
 .vscode/

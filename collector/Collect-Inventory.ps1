@@ -138,6 +138,48 @@ function ConvertTo-AdInfo {
     }
 }
 
+function Resolve-UserDisplayName {
+    <#
+        Traduce un login de forma "DOMENIU\popescu.ion" (cum vin logged_on_user
+        din Win32_ComputerSystem.UserName și last_logged_on_user din registry,
+        §5.5c) în numele afișat al persoanei (DisplayName din AD), ca interfața
+        web să arate "Popescu Ion", nu contul tehnic.
+
+        Rulează în firul PRINCIPAL (nu în runspace-urile de colectare CIM/DCOM):
+        Get-ADUser e o interogare AD separată de contactul cu stația, iar modulul
+        ActiveDirectory e deja încărcat aici (folosit și de Get-TargetComputers).
+        $Cache evită o interogare AD per stație — de regulă mult mai puțini
+        utilizatori unici decât stații într-un OU.
+    #>
+    param(
+        [string] $UserIdentity,
+        [System.Management.Automation.PSCredential] $Credential,
+        [hashtable] $Cache
+    )
+    if (-not $UserIdentity) { return $null }
+
+    # Get-ADUser -Identity acceptă sAMAccountName, nu formatul "domeniu\sam" —
+    # păstrăm doar ultima bucată după backslash (funcționează și dacă nu există
+    # backslash deloc, caz în care întoarce string-ul neschimbat).
+    $sam = ($UserIdentity -split '\\')[-1]
+    if (-not $sam) { return $null }
+    if ($Cache.ContainsKey($sam)) { return $Cache[$sam] }
+
+    $adParams = @{}
+    if ($Credential) { $adParams['Credential'] = $Credential }
+    try {
+        $u = Get-ADUser -Identity $sam -Properties DisplayName @adParams -ErrorAction Stop
+        $name = if ($u.DisplayName) { $u.DisplayName } else { $u.Name }
+        $Cache[$sam] = $name
+        return $name
+    } catch {
+        # Cont local (nu în AD), cont șters, sau eroare de interogare — nu
+        # blocăm nimic, doar rămânem fără nume de afișat pentru acest login.
+        $Cache[$sam] = $null
+        return $null
+    }
+}
+
 function Get-TargetComputers {
     # Sursa listei de stații: fie interogarea OU-ului (calea normală), fie
     # lista explicită -ComputerName (test pe 3-5 stații, per §11 pasul 2).
@@ -368,12 +410,13 @@ function Get-Level1Snapshot {
     param($CimSession, [int]$TimeoutSec)
 
     $result = @{
-        System    = $null
-        Os        = $null
-        Network   = $null
-        Disks     = @()
-        Antivirus = $null
-        Errors    = New-Object System.Collections.Generic.List[string]
+        System       = $null
+        Os           = $null
+        Network      = $null
+        Disks        = @()
+        Antivirus    = $null
+        AntivirusAll = @()
+        Errors       = New-Object System.Collections.Generic.List[string]
     }
 
     try {
@@ -452,10 +495,20 @@ function Get-Level1Snapshot {
     try {
         # root\SecurityCenter2 e alt namespace, dar aceeași sesiune CIM/DCOM —
         # nu trebuie deschisă o conexiune separată pentru el.
-        $av = Get-CimInstance -CimSession $CimSession -Namespace 'root\SecurityCenter2' `
+        #
+        # NU luăm doar primul rezultat (cum se făcea inițial): pot fi ÎNREGISTRATE
+        # simultan mai multe produse — ex. Windows Defender + un AV terță parte
+        # precum Bitdefender Endpoint Security Tools. Windows dezactivează de
+        # regulă protecția în timp real a Defender-ului când alt AV preia rolul,
+        # dar Defender rămâne înregistrat în Security Center ca produs
+        # "dezactivat". Ordinea în care WMI le întoarce nu e garantată — dacă am
+        # fi păstrat doar primul, am fi putut raporta exact acel Defender
+        # dezactivat drept "singurul AV", declanșând o alertă av_disabled falsă
+        # cât timp AV-ul terț chiar protejează stația (vezi alerts._check_av).
+        $avProducts = @(Get-CimInstance -CimSession $CimSession -Namespace 'root\SecurityCenter2' `
             -ClassName AntiVirusProduct -Property displayName, productState, timestamp `
-            -OperationTimeoutSec $TimeoutSec -ErrorAction Stop | Select-Object -First 1
-        if ($av) {
+            -OperationTimeoutSec $TimeoutSec -ErrorAction Stop)
+        foreach ($av in $avProducts) {
             $state = ConvertFrom-ProductState -ProductState $av.productState
             $sigDate = $null
             if ($av.timestamp) {
@@ -465,12 +518,25 @@ function Get-Level1Snapshot {
                     $sigDate = ConvertTo-Iso8601 ([System.Management.ManagementDateTimeConverter]::ToDateTime($av.timestamp))
                 } catch { }
             }
-            $result.Antivirus = @{
+            $result.AntivirusAll += @{
                 name           = $av.displayName
                 enabled        = $state.Enabled
                 up_to_date     = $state.UpToDate
                 signature_date = $sigDate
             }
+        }
+        if ($result.AntivirusAll.Count -gt 0) {
+            # "Antivirus" (singular) rămâne pentru compatibilitate cu coloanele
+            # simple din UI/CSV (av_name/av_enabled/...): alegem produsul cel mai
+            # relevant — unul cu protecție activă în locul unuia dezactivat, și
+            # între mai multe active, unul cu semnături la zi — ca rezumatul
+            # compact să arate AV-ul care chiar protejează stația. Lista completă
+            # rămâne în "AntivirusAll" (=> antivirus_all în NDJSON), folosită de
+            # alertare și de pagina detaliată a stației.
+            $result.Antivirus = $result.AntivirusAll |
+                Sort-Object -Property @{Expression = { if ($_.enabled) { 0 } else { 1 } }},
+                                       @{Expression = { if ($_.up_to_date) { 0 } else { 1 } }} |
+                Select-Object -First 1
         }
     } catch {
         $result.Errors.Add("AntiVirusProduct: $($_.Exception.Message)")
@@ -573,11 +639,91 @@ function Get-Level2Snapshot {
                     publisher    = Get-RegStringValue -CimSession $CimSession -Hive $HKLM -Path $subPath -ValueName 'Publisher' -TimeoutSec $TimeoutSec
                     install_date = Get-RegStringValue -CimSession $CimSession -Hive $HKLM -Path $subPath -ValueName 'InstallDate' -TimeoutSec $TimeoutSec
                     scope        = $branch.Scope
+                    user         = $null
                 })
             }
         } catch {
             $result.Errors.Add("Uninstall ($($branch.Path)): $($_.Exception.Message)")
         }
+    }
+
+    # f) Software instalat PER UTILIZATOR — instalări care scriu doar în hive-ul
+    # utilizatorului (HKEY_CURRENT_USER), nu în HKLM, deci invizibile la blocul (a)
+    # de mai sus. StdRegProv nu are un HKEY_CURRENT_USER separat de conceptul de
+    # sesiune curentă a apelantului (n-are sens la distanță) — dar fiecare profil
+    # logat își montează hive-ul (NTUSER.DAT) sub HKEY_USERS\<SID> cât timp
+    # utilizatorul e logat, iar StdRegProv POATE adresa HKEY_USERS direct
+    # (hDefKey = 2147483651 / 0x80000003). De-asta citim de acolo, nu din HKCU.
+    #
+    # LIMITARE CUNOSCUTĂ (best-effort, ca și decodarea productState mai sus):
+    # un profil offline (utilizator delogat) nu are hive-ul montat și NU apare
+    # aici — nu există o cale read-only de a-l citi fără WinRM/agent (montarea
+    # manuală a NTUSER.DAT ar însemna o scriere pe stația țintă, interzisă de
+    # regula strict read-only). În practică se văd userii logați la momentul
+    # scanării — suficient pentru pilot, dar de documentat explicit în UI.
+    $HKU = [uint32]2147483651   # 0x80000003 — HKEY_USERS
+
+    try {
+        # Numele de utilizator nu se poate citi din HKEY_USERS (hive-ul unui SID
+        # nu-și cunoaște propriul nume) — se rezolvă separat din ProfileList,
+        # care mapează SID -> ProfileImagePath (ex. "C:\Users\popescu.ion") încă
+        # din HKLM, deci disponibil indiferent dacă hive-ul e încărcat sau nu.
+        $profileMap = @{}
+        $profileListPath = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+        $profileSids = Get-RegSubKeyNames -CimSession $CimSession -Hive $HKLM -Path $profileListPath -TimeoutSec $TimeoutSec
+        foreach ($psid in $profileSids) {
+            $imagePath = Get-RegStringValue -CimSession $CimSession -Hive $HKLM `
+                -Path "$profileListPath\$psid" -ValueName 'ProfileImagePath' -TimeoutSec $TimeoutSec
+            if ($imagePath) {
+                $profileMap[$psid] = ($imagePath -split '\\')[-1]
+            }
+        }
+
+        # sSubKeyName = '' enumeră rădăcina hive-ului (aici HKEY_USERS), la fel
+        # cum am enumera rădăcina HKLM — StdRegProv tratează hDefKey ca hive-ul
+        # de pornit, nu ca o cheie anume.
+        $loadedSids = Get-RegSubKeyNames -CimSession $CimSession -Hive $HKU -Path '' -TimeoutSec $TimeoutSec
+        foreach ($sid in $loadedSids) {
+            # Excludem: hive-urile "..._Classes" (doar cache de asociere de
+            # fișiere per utilizator, nu un profil separat), ".DEFAULT" și
+            # conturile de serviciu S-1-5-18/19/20 (SYSTEM/LOCAL/NETWORK
+            # SERVICE) — niciunul dintre acestea nu e un "utilizator" în
+            # sensul cerut aici. Păstrăm doar SID-uri de cont normal
+            # (S-1-5-21-...), fie de domeniu, fie local.
+            if ($sid -match '_Classes$') { continue }
+            if ($sid -in @('.DEFAULT', 'S-1-5-18', 'S-1-5-19', 'S-1-5-20')) { continue }
+            if ($sid -notmatch '^S-1-5-21-') { continue }
+
+            $userName = if ($profileMap.ContainsKey($sid)) { $profileMap[$sid] } else { $sid }
+            $uninstallPath = "$sid\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+            try {
+                $subKeys = Get-RegSubKeyNames -CimSession $CimSession -Hive $HKU -Path $uninstallPath -TimeoutSec $TimeoutSec
+                foreach ($sk in $subKeys) {
+                    $subPath = "$uninstallPath\$sk"
+                    $displayName = Get-RegStringValue -CimSession $CimSession -Hive $HKU -Path $subPath -ValueName 'DisplayName' -TimeoutSec $TimeoutSec
+                    if (-not $displayName) { continue }
+
+                    $systemComponent = Get-RegDwordValue -CimSession $CimSession -Hive $HKU -Path $subPath -ValueName 'SystemComponent' -TimeoutSec $TimeoutSec
+                    if ($systemComponent -eq 1) { continue }
+
+                    $parentKeyName = Get-RegStringValue -CimSession $CimSession -Hive $HKU -Path $subPath -ValueName 'ParentKeyName' -TimeoutSec $TimeoutSec
+                    if ($parentKeyName) { continue }
+
+                    $result.Software.Add(@{
+                        name         = $displayName
+                        version      = Get-RegStringValue -CimSession $CimSession -Hive $HKU -Path $subPath -ValueName 'DisplayVersion' -TimeoutSec $TimeoutSec
+                        publisher    = Get-RegStringValue -CimSession $CimSession -Hive $HKU -Path $subPath -ValueName 'Publisher' -TimeoutSec $TimeoutSec
+                        install_date = Get-RegStringValue -CimSession $CimSession -Hive $HKU -Path $subPath -ValueName 'InstallDate' -TimeoutSec $TimeoutSec
+                        scope        = 'user'
+                        user         = $userName
+                    })
+                }
+            } catch {
+                $result.Errors.Add("Uninstall per utilizator ($sid): $($_.Exception.Message)")
+            }
+        }
+    } catch {
+        $result.Errors.Add("Software per utilizator (HKEY_USERS/ProfileList): $($_.Exception.Message)")
     }
 
     return $result
@@ -618,6 +764,7 @@ function Invoke-StationCollection {
         network         = $null
         disks           = @()
         antivirus       = $null
+        antivirus_all   = @()
         registry        = $null
     }
 
@@ -661,6 +808,7 @@ function Invoke-StationCollection {
         $record.network = $l1.Network
         $record.disks = $l1.Disks
         $record.antivirus = $l1.Antivirus
+        $record.antivirus_all = $l1.AntivirusAll
 
         $errs = New-Object System.Collections.Generic.List[string]
         $errs.AddRange($l1.Errors)
@@ -735,7 +883,8 @@ try {
             $rec = @{
                 schema = 1; level = $Level; collected_at = (ConvertTo-Iso8601 (Get-Date)); status = 'AD_ONLY'
                 error_message = $null; duration_cim_ms = $null; duration_reg_ms = $null
-                ad = $ad; system = $null; os = $null; network = $null; disks = @(); antivirus = $null; registry = $null
+                ad = $ad; system = $null; os = $null; network = $null; disks = @()
+                antivirus = $null; antivirus_all = @(); registry = $null
             }
             Write-NdjsonLine $rec
             $done++
@@ -794,6 +943,10 @@ try {
         $pending = New-Object System.Collections.Generic.List[object]
         $pending.AddRange($jobs)
         $done = 0
+        # Cache SAM -> DisplayName pentru Resolve-UserDisplayName, populat pe
+        # măsură ce vin rezultatele — vezi comentariul funcției pentru de ce
+        # rulează aici (fir principal), nu în runspace-urile de colectare.
+        $userDisplayNameCache = @{}
         while ($pending.Count -gt 0) {
             $finished = @($pending | Where-Object { $_.Handle.IsCompleted })
             if ($finished.Count -eq 0) {
@@ -803,14 +956,24 @@ try {
             foreach ($job in $finished) {
                 try {
                     $results = $job.Pipeline.EndInvoke($job.Handle)
-                    foreach ($rec in $results) { Write-NdjsonLine $rec }
+                    foreach ($rec in $results) {
+                        if ($rec.system -and $rec.system.logged_on_user) {
+                            $rec.system.logged_on_user_display_name = Resolve-UserDisplayName `
+                                -UserIdentity $rec.system.logged_on_user -Credential $Credential -Cache $userDisplayNameCache
+                        }
+                        if ($rec.registry -and $rec.registry.last_logged_on_user) {
+                            $rec.registry.last_logged_on_user_display_name = Resolve-UserDisplayName `
+                                -UserIdentity $rec.registry.last_logged_on_user -Credential $Credential -Cache $userDisplayNameCache
+                        }
+                        Write-NdjsonLine $rec
+                    }
                 } catch {
                     # Excepție nemanevrată în runspace (neașteptat) — nu blocăm restul scanării.
                     $errRec = @{
                         schema = 1; level = $Level; collected_at = (ConvertTo-Iso8601 (Get-Date)); status = 'WMI_ERROR'
                         error_message = $_.Exception.Message; duration_cim_ms = $null; duration_reg_ms = $null
                         ad = @{ name = $job.Name }; system = $null; os = $null; network = $null
-                        disks = @(); antivirus = $null; registry = $null
+                        disks = @(); antivirus = $null; antivirus_all = @(); registry = $null
                     }
                     Write-NdjsonLine $errRec
                 } finally {

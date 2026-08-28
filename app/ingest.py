@@ -203,6 +203,7 @@ def ingest_record(conn, run_id, record) -> int:
                 bios_version, cpu_name, ram_total_mb, os_caption, os_build,
                 os_display_version, os_arch, os_install_date, last_boot, uptime_days,
                 ip_address, mac_address, dhcp_enabled, logged_on_user, last_logged_on_user,
+                logged_on_user_display_name, last_logged_on_user_display_name,
                 av_name, av_enabled, av_up_to_date, av_signature_date, reboot_pending,
                 wu_last_success
             ) VALUES (
@@ -211,6 +212,7 @@ def ingest_record(conn, run_id, record) -> int:
                 :bios_version, :cpu_name, :ram_total_mb, :os_caption, :os_build,
                 :os_display_version, :os_arch, :os_install_date, :last_boot, :uptime_days,
                 :ip_address, :mac_address, :dhcp_enabled, :logged_on_user, :last_logged_on_user,
+                :logged_on_user_display_name, :last_logged_on_user_display_name,
                 :av_name, :av_enabled, :av_up_to_date, :av_signature_date, :reboot_pending,
                 :wu_last_success
             )
@@ -239,6 +241,8 @@ def ingest_record(conn, run_id, record) -> int:
                 dhcp_enabled         = excluded.dhcp_enabled,
                 logged_on_user       = excluded.logged_on_user,
                 last_logged_on_user  = excluded.last_logged_on_user,
+                logged_on_user_display_name      = excluded.logged_on_user_display_name,
+                last_logged_on_user_display_name = excluded.last_logged_on_user_display_name,
                 av_name              = excluded.av_name,
                 av_enabled           = excluded.av_enabled,
                 av_up_to_date        = excluded.av_up_to_date,
@@ -273,6 +277,8 @@ def ingest_record(conn, run_id, record) -> int:
                 "dhcp_enabled": network.get("dhcp_enabled"),
                 "logged_on_user": system.get("logged_on_user"),
                 "last_logged_on_user": (registry or {}).get("last_logged_on_user"),
+                "logged_on_user_display_name": system.get("logged_on_user_display_name"),
+                "last_logged_on_user_display_name": (registry or {}).get("last_logged_on_user_display_name"),
                 "av_name": antivirus.get("name"),
                 "av_enabled": antivirus.get("enabled"),
                 "av_up_to_date": antivirus.get("up_to_date"),
@@ -301,16 +307,26 @@ def ingest_record(conn, run_id, record) -> int:
                 (snapshot_id, disk.get("device_id"), disk.get("volume_name"), size_mb, free_mb, free_pct),
             )
 
+        conn.execute("DELETE FROM snapshot_antivirus WHERE snapshot_id = ?", (snapshot_id,))
+        for av in record.get("antivirus_all") or []:
+            conn.execute(
+                """
+                INSERT INTO snapshot_antivirus (snapshot_id, name, enabled, up_to_date, signature_date)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (snapshot_id, av.get("name"), av.get("enabled"), av.get("up_to_date"), av.get("signature_date")),
+            )
+
         conn.execute("DELETE FROM snapshot_software WHERE snapshot_id = ?", (snapshot_id,))
         if registry:
             for sw in registry.get("software") or []:
                 conn.execute(
                     """
-                    INSERT INTO snapshot_software (snapshot_id, name, version, publisher, install_date, scope)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO snapshot_software (snapshot_id, name, version, publisher, install_date, scope, user_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (snapshot_id, sw.get("name"), sw.get("version"), sw.get("publisher"),
-                     sw.get("install_date"), sw.get("scope")),
+                     sw.get("install_date"), sw.get("scope"), sw.get("user")),
                 )
 
         conn.commit()
