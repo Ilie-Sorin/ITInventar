@@ -248,9 +248,18 @@ function Get-OuInventoryList {
     # rădăcina domeniului — o includem manual, ca opțiune "tot domeniul/subarborele".
     $allBases = @([PSCustomObject]@{ DistinguishedName = $Base }) + $ous
 
+    # O singură interogare pentru toate stațiile active din tot subarborele lui
+    # $Base, apoi numărăm în memorie câte aparțin fiecărui OU (inclusiv
+    # sub-OU-uri, după sufixul DN-ului). Varianta anterioară rula câte un
+    # Get-ADComputer -SearchScope Subtree PENTRU FIECARE OU găsit — pe un
+    # subarbore cu zeci de OU-uri, asta înseamnă zeci de interogări LDAP care
+    # re-parcurg de fiecare dată tot subarborele respectiv, depășind ușor cele
+    # 30s alocate rutei /ous (vezi timeout-ul din app/scanner.py:list_ous).
+    $allComputers = @(Get-ADComputer -SearchBase $Base -SearchScope Subtree -Filter 'Enabled -eq $true' @adParams -ErrorAction Stop)
+
     foreach ($ou in $allBases) {
-        $count = (Get-ADComputer -SearchBase $ou.DistinguishedName -SearchScope Subtree -Filter 'Enabled -eq $true' @adParams -ErrorAction Stop |
-            Measure-Object).Count
+        $suffix = ",$($ou.DistinguishedName)"
+        $count = @($allComputers | Where-Object { $_.DistinguishedName -like "*$suffix" }).Count
         [PSCustomObject]@{
             StatiiActive      = $count
             DistinguishedName = $ou.DistinguishedName
