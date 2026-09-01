@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Export{% endblock %}
+{% block content %}
+<h1>Export date</h1>
+<p class="subtitle">
+  Exportă într-un fișier .xlsx, cu foi separate, tot ce apare pe fișa unei stații de la
+  „Valori curente” până la „Software instalat” (valori curente, discuri, antivirus, software
+  mașină și per utilizator) — pentru stațiile care corespund filtrelor de mai jos.
+</p>
+
+<form method="get" class="filter-row" id="export-filter-form">
+  <input type="search" name="q" value="{{ search }}" placeholder="Căutare liberă (nume, OU, OS, IP)">
+  <select name="ou">
+    <option value="">Toate OU-urile</option>
+    {% for o in ou_options %}
+    <option value="{{ o }}" {{ 'selected' if o == ou else '' }}>{{ o }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">Toate statusurile</option>
+    {% for s in status_options %}
+    <option value="{{ s }}" {{ 'selected' if s == status else '' }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <select name="os">
+    <option value="">Toate OS-urile</option>
+    {% for o in os_options %}
+    <option value="{{ o }}" {{ 'selected' if o == os_filter else '' }}>{{ o }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="dir" value="{{ direction }}">
+  <button type="submit">Filtrează</button>
+  <a class="btn-secondary" href="{{ url_for('export_page') }}">Resetează</a>
+</form>
+
+<p class="result-count">{{ rows | length }} stații corespund filtrului curent.</p>
+
+<p>
+  <button type="button" id="export-xlsx-btn"
+          data-url="{{ url_for('export_inventory_xlsx', q=search, ou=ou, status=status, os=os_filter, sort=sort, dir=direction) }}">
+    Exportă XLSX…
+  </button>
+  <span class="muted" style="margin-left: 8px;">Alegi folderul de salvare la click (dacă browserul suportă asta — altfel merge în folderul obișnuit de descărcări).</span>
+</p>
+<p id="export-status" class="scan-error" hidden></p>
+
+<div class="table-scroll">
+<table class="data-table compact">
+  <thead><tr><th>Nume</th><th>OU</th><th>OS</th><th>Status</th><th>Ultima vedere</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('station_detail', name=r.name) }}">{{ r.name }}</a></td>
+      <td>{{ r.ou_path or '—' }}</td>
+      <td>{{ r.os_caption or '—' }}{% if r.os_build %} ({{ r.os_build }}){% endif %}</td>
+      <td><span class="badge badge-{{ r.status | status_class }}">{{ r.status or '—' }}</span></td>
+      <td>{{ r.last_seen | fmt_dt }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="empty-state">Nicio stație găsită.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

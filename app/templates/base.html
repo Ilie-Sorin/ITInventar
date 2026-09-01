@@ -16,6 +16,7 @@
       <a href="{{ url_for('software') }}" class="{{ 'active' if request.endpoint == 'software' else '' }}">Software</a>
       <a href="{{ url_for('alerte') }}" class="{{ 'active' if request.endpoint == 'alerte' else '' }}">Alerte</a>
       <a href="{{ url_for('rulari') }}" class="{{ 'active' if request.endpoint == 'rulari' else '' }}">Rulări</a>
+      <a href="{{ url_for('export_page') }}" class="{{ 'active' if request.endpoint in ('export_page', 'export_inventory_xlsx') else '' }}">Export</a>
     </nav>
     <div class="scan-widget">
       <form id="scan-form" class="scan-form">

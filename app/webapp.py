@@ -16,21 +16,25 @@ import io
 import sys
 from pathlib import Path
 
-from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, url_for
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import alerts as alerts_module  # noqa: E402
 import db  # noqa: E402
+import formatting  # noqa: E402
 import ingest  # noqa: E402
+import messenger  # noqa: E402
+import xlsx_export  # noqa: E402
 from scanner import OuListError, ScanAlreadyRunningError, list_ous, scanner  # noqa: E402
 
 app = Flask(__name__)
 db.init_db()
 
-# Endpoint-uri care pot porni/opri o scanare sau interoga direct AD — separate
-# de paginile de consultare, care rămân vizibile din toată rețeaua. Numele
-# sunt cele implicite Flask (numele funcției), nu URL-urile.
-_LOCAL_ONLY_ENDPOINTS = {"start_scan", "stop_scan", "ous"}
+# Endpoint-uri care pot porni/opri o scanare, interoga direct AD, sau trimite
+# o comandă de scriere unei stații (mesaj + parolă de admin) — separate de
+# paginile de consultare, care rămân vizibile din toată rețeaua. Numele sunt
+# cele implicite Flask (numele funcției), nu URL-urile.
+_LOCAL_ONLY_ENDPOINTS = {"start_scan", "stop_scan", "ous", "send_station_message"}
 
 
 @app.before_request
@@ -67,16 +71,9 @@ def close_db(exception=None):
 @app.template_filter("fmt_dt")
 def fmt_dt(value):
     """'2026-08-26T09:14:03+03:00' -> '26.08.2026 09:14' — fără conversii de fus,
-    doar reformatare pentru citire (§6: timpii rămân exact cum vin din colector)."""
-    if not value:
-        return "—"
-    try:
-        date_part, time_part = value.split("T")
-        y, m, d = date_part.split("-")
-        hh_mm = time_part[:5]
-        return f"{d}.{m}.{y} {hh_mm}"
-    except (ValueError, IndexError):
-        return value
+    doar reformatare pentru citire (§6: timpii rămân exact cum vin din colector).
+    Logica e în formatting.py, partajată cu exportul .xlsx (xlsx_export.py)."""
+    return formatting.fmt_dt(value)
 
 
 @app.template_filter("fmt_mb")
@@ -144,7 +141,18 @@ def inject_globals():
 # Interogări partajate
 # ---------------------------------------------------------------------------
 
-def get_latest_run(conn):
+def get_latest_run(conn, level=None):
+    """Ultima rulare finalizată. Cu level=2, ultima rulare de Nivel 2 specific —
+    folosit la intrarea în aplicație (§ Sumar) ca datele complete (software,
+    reboot în așteptare) să fie cele afișate implicit, chiar dacă între timp
+    a mai rulat și o scanare de Nivel 1 (mai rapidă, fără să le înlocuiască
+    aici — cele două nivele sunt urmărite separat, vezi /rulari)."""
+    if level is not None:
+        return conn.execute(
+            "SELECT * FROM runs WHERE finished_at IS NOT NULL AND level = ? "
+            "ORDER BY started_at DESC LIMIT 1",
+            (level,),
+        ).fetchone()
     return conn.execute(
         "SELECT * FROM runs WHERE finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 1"
     ).fetchone()
@@ -170,12 +178,35 @@ _STATION_SORT_COLUMNS = {
 }
 
 
+def _stations_where(search=None, ou=None, status=None, os_filter=None):
+    """Construiește clauza WHERE partajată de query_stations() și
+    query_stations_export(), ca filtrele din /statii și din /export să se
+    comporte identic pe același set de coloane."""
+    clauses = ["1 = 1"]
+    params = []
+    if search:
+        like = f"%{search}%"
+        clauses.append("(h.name LIKE ? OR h.ou_path LIKE ? OR s.os_caption LIKE ? OR s.ip_address LIKE ?)")
+        params += [like, like, like, like]
+    if ou:
+        clauses.append("h.ou_path = ?")
+        params.append(ou)
+    if status:
+        clauses.append("s.status = ?")
+        params.append(status)
+    if os_filter:
+        clauses.append("s.os_caption = ?")
+        params.append(os_filter)
+    return " AND ".join(clauses), params
+
+
 def query_stations(conn, search=None, ou=None, status=None, os_filter=None,
                     sort="name", direction="asc"):
     """Toate stațiile cu cel mai recent snapshot al lor (indiferent de rulare),
     plus procentul liber pe C:. Folosită atât de /statii cât și de export CSV,
     ca cele două să rămână mereu în acord."""
-    sql = """
+    where_sql, params = _stations_where(search, ou, status, os_filter)
+    sql = f"""
         SELECT
             h.id AS host_id, h.name, h.ou_path, h.ad_description, h.last_seen,
             s.id AS snapshot_id, s.run_id, s.status, s.error_message,
@@ -183,6 +214,7 @@ def query_stations(conn, search=None, ou=None, status=None, os_filter=None,
             s.ip_address, s.logged_on_user, s.last_logged_on_user,
             s.logged_on_user_display_name, s.last_logged_on_user_display_name, s.uptime_days,
             s.av_name, s.av_enabled, s.av_up_to_date, s.level, s.collected_at,
+            s.last_boot, s.reboot_pending,
             d.free_pct AS c_free_pct, d.free_mb AS c_free_mb, d.size_mb AS c_size_mb
         FROM hosts h
         LEFT JOIN snapshots s ON s.id = (
@@ -190,28 +222,111 @@ def query_stations(conn, search=None, ou=None, status=None, os_filter=None,
             ORDER BY s2.collected_at DESC, s2.id DESC LIMIT 1
         )
         LEFT JOIN snapshot_disks d ON d.snapshot_id = s.id AND d.device_id = 'C:'
-        WHERE 1 = 1
+        WHERE {where_sql}
     """
-    params = []
-    if search:
-        like = f"%{search}%"
-        sql += " AND (h.name LIKE ? OR h.ou_path LIKE ? OR s.os_caption LIKE ? OR s.ip_address LIKE ?)"
-        params += [like, like, like, like]
-    if ou:
-        sql += " AND h.ou_path = ?"
-        params.append(ou)
-    if status:
-        sql += " AND s.status = ?"
-        params.append(status)
-    if os_filter:
-        sql += " AND s.os_caption = ?"
-        params.append(os_filter)
-
     col = _STATION_SORT_COLUMNS.get(sort, "h.name")
     order = "DESC" if direction == "desc" else "ASC"
     sql += f" ORDER BY {col} {order}"
 
     return conn.execute(sql, params).fetchall()
+
+
+def query_stations_export(conn, search=None, ou=None, status=None, os_filter=None,
+                           sort="name", direction="asc"):
+    """Ca query_stations(), dar cu toate coloanele din secțiunea "Valori curente"
+    a fișei stației (nu doar cele afișate în tabelul /statii) — sursă pentru
+    foaia "Valori curente" a exportului .xlsx (§ /export)."""
+    where_sql, params = _stations_where(search, ou, status, os_filter)
+    sql = f"""
+        SELECT
+            h.id AS host_id, h.name, h.ou_path, h.ad_description,
+            s.id AS snapshot_id, s.status, s.error_message, s.level,
+            s.manufacturer, s.model, s.serial_number, s.bios_version, s.cpu_name, s.ram_total_mb,
+            s.os_caption, s.os_build, s.os_display_version, s.os_arch,
+            s.last_boot, s.uptime_days, s.ip_address, s.mac_address, s.dhcp_enabled,
+            s.logged_on_user, s.last_logged_on_user,
+            s.logged_on_user_display_name, s.last_logged_on_user_display_name,
+            s.av_name, s.av_enabled, s.av_up_to_date, s.reboot_pending, s.wu_last_success,
+            s.collected_at,
+            d.free_pct AS c_free_pct, d.free_mb AS c_free_mb, d.size_mb AS c_size_mb
+        FROM hosts h
+        LEFT JOIN snapshots s ON s.id = (
+            SELECT s2.id FROM snapshots s2 WHERE s2.host_id = h.id
+            ORDER BY s2.collected_at DESC, s2.id DESC LIMIT 1
+        )
+        LEFT JOIN snapshot_disks d ON d.snapshot_id = s.id AND d.device_id = 'C:'
+        WHERE {where_sql}
+    """
+    col = _STATION_SORT_COLUMNS.get(sort, "h.name")
+    order = "DESC" if direction == "desc" else "ASC"
+    sql += f" ORDER BY {col} {order}"
+
+    return conn.execute(sql, params).fetchall()
+
+
+def query_export_disks_antivirus(conn, snapshot_ids):
+    """Discuri + produse antivirus pentru exact snapshot-urile din
+    query_stations_export() (nu recalculează filtrul — refolosește
+    snapshot_id-urile deja obținute)."""
+    snapshot_ids = [sid for sid in snapshot_ids if sid is not None]
+    if not snapshot_ids:
+        return [], []
+    placeholders = ",".join("?" for _ in snapshot_ids)
+    disks = conn.execute(
+        f"""
+        SELECT h.name AS host_name, d.device_id, d.volume_name, d.size_mb, d.free_mb, d.free_pct
+        FROM snapshot_disks d
+        JOIN snapshots s ON s.id = d.snapshot_id
+        JOIN hosts h ON h.id = s.host_id
+        WHERE d.snapshot_id IN ({placeholders})
+        ORDER BY h.name COLLATE NOCASE, d.device_id
+        """,
+        snapshot_ids,
+    ).fetchall()
+    antivirus = conn.execute(
+        f"""
+        SELECT h.name AS host_name, a.name, a.enabled, a.up_to_date, a.signature_date
+        FROM snapshot_antivirus a
+        JOIN snapshots s ON s.id = a.snapshot_id
+        JOIN hosts h ON h.id = s.host_id
+        WHERE a.snapshot_id IN ({placeholders})
+        ORDER BY h.name COLLATE NOCASE, a.name COLLATE NOCASE
+        """,
+        snapshot_ids,
+    ).fetchall()
+    return disks, antivirus
+
+
+def query_export_software(conn, host_ids):
+    """Software (mașină + per utilizator) de pe cel mai recent snapshot de
+    Nivel 2 al fiecărei stații din `host_ids` — la fel ca fișa stației
+    (station_detail), nu neapărat de pe snapshot-ul CEL MAI RECENT (care ar
+    putea fi de Nivel 1, fără date de software)."""
+    host_ids = [hid for hid in host_ids if hid is not None]
+    if not host_ids:
+        return [], []
+    placeholders = ",".join("?" for _ in host_ids)
+    sql = f"""
+        WITH latest_l2 AS (
+            SELECT s.id AS snapshot_id, s.host_id
+            FROM snapshots s
+            WHERE s.level = 2 AND s.host_id IN ({placeholders}) AND s.id = (
+                SELECT s2.id FROM snapshots s2
+                WHERE s2.host_id = s.host_id AND s2.level = 2
+                ORDER BY s2.collected_at DESC, s2.id DESC LIMIT 1
+            )
+        )
+        SELECT h.name AS host_name, sw.name, sw.version, sw.publisher, sw.install_date,
+               sw.scope, sw.user_name
+        FROM snapshot_software sw
+        JOIN latest_l2 l ON l.snapshot_id = sw.snapshot_id
+        JOIN hosts h ON h.id = l.host_id
+        ORDER BY h.name COLLATE NOCASE, sw.name COLLATE NOCASE
+    """
+    rows = conn.execute(sql, host_ids).fetchall()
+    machine = [r for r in rows if r["scope"] != "user"]
+    user = [r for r in rows if r["scope"] == "user"]
+    return machine, user
 
 
 def query_software_aggregate(conn):
@@ -265,7 +380,17 @@ def query_software_hosts(conn, name, version):
 @app.route("/")
 def dashboard():
     conn = get_db()
-    run = get_latest_run(conn)
+    # Implicit arătăm ultima rulare de Nivel 2 (date complete: software,
+    # reboot în așteptare) — fără asta, o scanare de Nivel 1 pornită ulterior
+    # (mai rapidă, des repetată) ar înlocui pe Sumar date mai complete cu
+    # unele parțiale, deși cele de Nivel 2 sunt tot ce are operatorul nevoie
+    # să vadă fără să mai pornească nimic manual (cerința: date vizibile la
+    # intrarea în aplicație, fără o scanare nouă).
+    run = get_latest_run(conn, level=2)
+    used_fallback_level = False
+    if run is None:
+        run = get_latest_run(conn)
+        used_fallback_level = run is not None
     host_total = conn.execute("SELECT COUNT(*) AS n FROM hosts").fetchone()["n"]
 
     status_dist = []
@@ -310,6 +435,7 @@ def dashboard():
     return render_template(
         "dashboard.html", run=run, host_total=host_total, status_dist=status_dist,
         os_dist=os_dist, top_disks=top_disks, crit_alerts=crit_alerts,
+        used_fallback_level=used_fallback_level,
     )
 
 
@@ -443,6 +569,35 @@ def station_detail(name):
         chart_points=chart_points, chart_w=chart_w, chart_h=chart_h,
         disk_threshold=disk_threshold, threshold_y=threshold_y,
     )
+
+
+@app.route("/statie/<name>/mesaj", methods=["POST"])
+def send_station_message(name):
+    """Trimite un mesaj pop-up (msg.exe) stației, prin CIM/DCOM — vezi
+    messenger.py și collector/Send-StationMessage.ps1. Restricționată la
+    127.0.0.1 (_LOCAL_ONLY_ENDPOINTS), la fel ca /scan: poate primi o parolă
+    de admin AD, dată separat doar pentru acest apel."""
+    conn = get_db()
+    host = conn.execute("SELECT * FROM hosts WHERE name = ?", (name,)).fetchone()
+    if host is None:
+        abort(404)
+
+    data = request.get_json(silent=True) or request.form
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "Mesajul nu poate fi gol."}), 400
+
+    admin_user = (data.get("admin_user") or "").strip() or None
+    admin_pass = data.get("admin_pass") or None
+    if admin_user and not admin_pass:
+        return jsonify({"error": "Lipsește parola pentru contul de admin dat."}), 400
+
+    try:
+        messenger.send_message(name, message, admin_user, admin_pass)
+    except messenger.MessengerError as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    return jsonify({"ok": True})
 
 
 @app.route("/software")
@@ -617,6 +772,70 @@ def export_software_csv():
     rows = query_software_aggregate(conn)
     fieldnames = ["name", "version", "host_count"]
     return _csv_response(fieldnames, (dict(r) for r in rows), "software.csv")
+
+
+# ---------------------------------------------------------------------------
+# Export .xlsx (Valori curente → Software instalat), pentru stațiile filtrate
+# ---------------------------------------------------------------------------
+
+def _export_filters_from_request():
+    return (
+        request.args.get("q", "").strip() or None,
+        request.args.get("ou", "").strip() or None,
+        request.args.get("status", "").strip() or None,
+        request.args.get("os", "").strip() or None,
+    )
+
+
+@app.route("/export")
+def export_page():
+    conn = get_db()
+    search, ou, status, os_filter = _export_filters_from_request()
+    sort = request.args.get("sort", "name")
+    direction = request.args.get("dir", "asc")
+
+    rows = query_stations(conn, search, ou, status, os_filter, sort, direction)
+
+    ou_options = [r[0] for r in conn.execute(
+        "SELECT DISTINCT ou_path FROM hosts WHERE ou_path IS NOT NULL ORDER BY ou_path COLLATE NOCASE"
+    ).fetchall()]
+    status_options = [r[0] for r in conn.execute(
+        "SELECT DISTINCT status FROM snapshots WHERE status IS NOT NULL ORDER BY status"
+    ).fetchall()]
+    os_options = [r[0] for r in conn.execute(
+        "SELECT DISTINCT os_caption FROM snapshots WHERE os_caption IS NOT NULL ORDER BY os_caption"
+    ).fetchall()]
+
+    return render_template(
+        "export.html", rows=rows,
+        search=search or "", ou=ou or "", status=status or "", os_filter=os_filter or "",
+        sort=sort, direction=direction,
+        ou_options=ou_options, status_options=status_options, os_options=os_options,
+    )
+
+
+@app.route("/export/inventar.xlsx")
+def export_inventory_xlsx():
+    """Exportul .xlsx propriu-zis (§ /export) — pagina de filtrare face fetch()
+    la această rută și scrie răspunsul unde alege utilizatorul (File System
+    Access API în browser, când e disponibilă — vezi app.js), nu neapărat în
+    folderul implicit de descărcări."""
+    conn = get_db()
+    search, ou, status, os_filter = _export_filters_from_request()
+    sort = request.args.get("sort", "name")
+    direction = request.args.get("dir", "asc")
+
+    stations = query_stations_export(conn, search, ou, status, os_filter, sort, direction)
+    disks, antivirus = query_export_disks_antivirus(conn, (r["snapshot_id"] for r in stations))
+    software_machine, software_user = query_export_software(conn, (r["host_id"] for r in stations))
+
+    xlsx_bytes = xlsx_export.build_workbook(stations, disks, antivirus, software_machine, software_user)
+    return send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="inventar.xlsx",
+    )
 
 
 if __name__ == "__main__":

@@ -407,6 +407,48 @@ table { border-collapse: collapse; width: 100%; }
   margin-top: 10px;
 }
 
+/* ---------- Modal (mesaj către stație — pagina /statii) ---------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 19, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.modal-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  width: 520px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(20, 20, 19, 0.28);
+}
+.modal-textarea {
+  width: 100%;
+  min-height: 180px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 /* ---------- Grafic istoric disc (SVG, fără librărie) ---------- */
 
 .chart-wrap { position: relative; }

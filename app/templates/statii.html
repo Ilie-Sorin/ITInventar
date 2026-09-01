@@ -50,6 +50,7 @@
         </a>
       </th>
       {% endfor %}
+      <th>Acțiuni</th>
     </tr>
   </thead>
   <tbody>
@@ -72,11 +73,22 @@
       </td>
       <td><span class="badge badge-{{ r.status | status_class }}">{{ r.status or '—' }}</span></td>
       <td>{{ r.last_seen | fmt_dt }}</td>
+      <td>
+        <button type="button" class="btn-secondary msg-open-btn"
+                data-host="{{ r.name }}"
+                data-last-boot="{{ r.last_boot | fmt_dt }}"
+                data-uptime="{{ r.uptime_days | fmt_num }}"
+                data-reboot="{{ 'da' if (r.level == 2 and r.reboot_pending) else ('nu' if r.level == 2 else 'necunoscut (necesită Nivel 2)') }}">
+          Mesaj…
+        </button>
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="11" class="empty-state">Nicio stație găsită.</td></tr>
+    <tr><td colspan="12" class="empty-state">Nicio stație găsită.</td></tr>
     {% endfor %}
   </tbody>
 </table>
 </div>
+
+{% include "_msg_modal.html" %}
 {% endblock %}

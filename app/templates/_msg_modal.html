@@ -1,0 +1,22 @@
+<div id="msg-modal-backdrop" class="modal-backdrop" hidden>
+  <div class="modal-box">
+    <h2>Mesaj către <span id="msg-modal-host"></span></h2>
+    <textarea id="msg-modal-text" class="modal-textarea" rows="10"></textarea>
+
+    <div class="scan-elevate-wrap">
+      <button type="button" id="msg-elevate-toggle" class="link-more">Alt cont AD…</button>
+      <div id="msg-elevate-fields" class="elevate-fields" hidden>
+        <input type="text" id="msg-admin-user" placeholder="DOMENIU\user" autocomplete="off">
+        <input type="password" id="msg-admin-pass" placeholder="Parolă" autocomplete="new-password">
+      </div>
+    </div>
+
+    <p id="msg-modal-error" class="scan-error" hidden></p>
+    <p id="msg-modal-success" class="callout" hidden></p>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="msg-modal-cancel">Anulează</button>
+      <button type="button" id="msg-modal-send">Trimite mesajul</button>
+    </div>
+  </div>
+</div>

@@ -6,6 +6,10 @@
 {% if not run %}
 <p class="empty-state">Nicio rulare finalizată încă. Pornește o scanare din antet ca să vezi date aici.</p>
 {% else %}
+{% if used_fallback_level %}
+<p class="callout">Nicio rulare de Nivel 2 încă — se arată mai jos ultima rulare disponibilă, de Nivel {{ run.level }}
+  (date parțiale: fără software instalat, reboot în așteptare etc.). Pornește o scanare de Nivel 2 pentru imaginea completă.</p>
+{% endif %}
 <div class="stat-grid">
   <div class="stat-tile">
     <div class="stat-label">Stații cunoscute</div>

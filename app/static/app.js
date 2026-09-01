@@ -341,4 +341,172 @@
       dot.addEventListener("blur", hideTooltip);
     });
   }
+
+  // ---------------------------------------------------------------------
+  // Mesaj către o stație (pagina /statii) — POST /statie/<nume>/mesaj,
+  // care pornește msg.exe pe stație prin CIM/DCOM (vezi messenger.py).
+  // Restricționat la 127.0.0.1 în webapp.py, ca la scanare.
+  // ---------------------------------------------------------------------
+  var msgBackdrop = document.getElementById("msg-modal-backdrop");
+
+  if (msgBackdrop) {
+    var msgHostLabel = document.getElementById("msg-modal-host");
+    var msgText = document.getElementById("msg-modal-text");
+    var msgError = document.getElementById("msg-modal-error");
+    var msgSuccess = document.getElementById("msg-modal-success");
+    var msgSendBtn = document.getElementById("msg-modal-send");
+    var msgCancelBtn = document.getElementById("msg-modal-cancel");
+    var msgAdminUser = document.getElementById("msg-admin-user");
+    var msgAdminPass = document.getElementById("msg-admin-pass");
+    var msgElevateToggle = document.getElementById("msg-elevate-toggle");
+    var msgElevateFields = document.getElementById("msg-elevate-fields");
+    var currentMsgHost = null;
+
+    // Text implicit (§ cerință): pornește de la formularea standard cerută,
+    // completată cu datele reale ale stației (ultima pornire, uptime, reboot
+    // în așteptare) — rămâne complet editabil înainte de trimitere.
+    function buildDefaultMessage(lastBoot, uptime, rebootLabel) {
+      return "Mesaj din partea Administratorului de Active Directory.\n\n" +
+        "Conform ultimei interogări de inventariere: ultima pornire a stației a fost la " +
+        lastBoot + ", cu un uptime curent de " + uptime + " zile. Reboot în așteptare: " +
+        rebootLabel + ".\n\n" +
+        "Vă rugăm ca în perioada următoare să efectuați un Restart al stației dumneavoastră.\n\n" +
+        "Vă rugăm să urmați această procedură atunci când aveți un interval de timp în care nu " +
+        "este strict necesară utilizarea PC-ului.\n\n" +
+        "Vă mulțumim pentru înțelegere.";
+    }
+
+    function closeMsgModal() {
+      msgBackdrop.hidden = true;
+    }
+
+    document.querySelectorAll(".msg-open-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        currentMsgHost = btn.getAttribute("data-host");
+        msgHostLabel.textContent = currentMsgHost;
+        msgText.value = buildDefaultMessage(
+          btn.getAttribute("data-last-boot"),
+          btn.getAttribute("data-uptime"),
+          btn.getAttribute("data-reboot")
+        );
+        msgError.hidden = true;
+        msgSuccess.hidden = true;
+        msgAdminUser.value = "";
+        msgAdminPass.value = "";
+        msgElevateFields.hidden = true;
+        msgBackdrop.hidden = false;
+      });
+    });
+
+    msgCancelBtn.addEventListener("click", closeMsgModal);
+    msgBackdrop.addEventListener("click", function (evt) {
+      if (evt.target === msgBackdrop) closeMsgModal();
+    });
+    msgElevateToggle.addEventListener("click", function (evt) {
+      evt.stopPropagation();
+      msgElevateFields.hidden = !msgElevateFields.hidden;
+    });
+    msgElevateFields.addEventListener("click", function (evt) { evt.stopPropagation(); });
+
+    msgSendBtn.addEventListener("click", function () {
+      msgError.hidden = true;
+      msgSuccess.hidden = true;
+      var payload = { message: msgText.value };
+      var au = msgAdminUser.value.trim();
+      if (au) {
+        payload.admin_user = au;
+        payload.admin_pass = msgAdminPass.value;
+      }
+      msgSendBtn.disabled = true;
+      msgSendBtn.textContent = "Se trimite…";
+
+      fetch("/statie/" + encodeURIComponent(currentMsgHost) + "/mesaj", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(function (r) {
+          return r.json()
+            .catch(function () { return { error: "Acțiunea merge doar de pe calculatorul cu serverul (127.0.0.1)." }; })
+            .then(function (data) { return { ok: r.ok, data: data }; });
+        })
+        .then(function (result) {
+          msgAdminPass.value = "";
+          if (!result.ok) {
+            msgError.textContent = result.data.error || "Trimiterea mesajului a eșuat.";
+            msgError.hidden = false;
+            return;
+          }
+          msgSuccess.textContent = "Mesaj trimis către " + currentMsgHost + ".";
+          msgSuccess.hidden = false;
+        })
+        .catch(function () {
+          msgAdminPass.value = "";
+          msgError.textContent = "Eroare de rețea la trimiterea mesajului.";
+          msgError.hidden = false;
+        })
+        .then(function () {
+          msgSendBtn.disabled = false;
+          msgSendBtn.textContent = "Trimite mesajul";
+        });
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Export .xlsx într-un folder ales de utilizator (pagina /export) —
+  // File System Access API (Chrome/Edge) când e disponibilă; altfel cade pe
+  // descărcarea obișnuită a browserului (folderul implicit de descărcări).
+  // ---------------------------------------------------------------------
+  var exportBtn = document.getElementById("export-xlsx-btn");
+  var exportStatus = document.getElementById("export-status");
+
+  if (exportBtn) {
+    exportBtn.addEventListener("click", function () {
+      exportStatus.hidden = true;
+      var url = exportBtn.getAttribute("data-url");
+      var originalText = exportBtn.textContent;
+      exportBtn.disabled = true;
+      exportBtn.textContent = "Se pregătește exportul…";
+
+      fetch(url)
+        .then(function (r) {
+          if (!r.ok) throw new Error("Serverul a răspuns cu eroare (" + r.status + ").");
+          return r.blob();
+        })
+        .then(function (blob) {
+          var suggestedName = "inventar-" + new Date().toISOString().slice(0, 10) + ".xlsx";
+          if (window.showSaveFilePicker) {
+            return window.showSaveFilePicker({
+              suggestedName: suggestedName,
+              types: [{
+                description: "Registru Excel",
+                accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] },
+              }],
+            }).then(function (handle) {
+              return handle.createWritable().then(function (writable) {
+                return writable.write(blob).then(function () { return writable.close(); });
+              });
+            });
+          }
+          // Fallback fără alegere de folder: descărcare obișnuită a browserului.
+          var link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = suggestedName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(function () { URL.revokeObjectURL(link.href); }, 5000);
+        })
+        .catch(function (err) {
+          // Renunțarea la dialogul de salvare (Anulează) nu e o eroare reală.
+          if (err && err.name === "AbortError") return;
+          exportStatus.textContent = "Exportul a eșuat: " + (err && err.message ? err.message : "eroare necunoscută.");
+          exportStatus.hidden = false;
+        })
+        .then(function () {
+          exportBtn.disabled = false;
+          exportBtn.textContent = originalText;
+        });
+    });
+  }
 })();
