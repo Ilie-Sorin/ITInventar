@@ -5,7 +5,19 @@ Constrângeri obligatorii pentru orice lucru pe acest proiect (detalii complete 
 
 - **Fără WinRM.** Comunicarea cu stațiile se face exclusiv prin CIM peste **DCOM**
   (`New-CimSessionOption -Protocol Dcom`), niciodată WSMan.
-- **Fără GPO / agent / scheduled task / logon script** pe stațiile inventariate.
+- **Fără GPO / agent / scheduled task / logon script** pe stațiile inventariate — cu o
+  singură excepție restrânsă, explicită: funcția de mesaj către stație
+  (`POST /statie/<nume>/mesaj`, implementată în `collector/Send-StationMessage.ps1`) creează
+  pe stația țintă un task Windows temporar, cu nume unic, cu declanșator „doar când
+  utilizatorul e logat, interactiv" (`schtasks /IT /RU <user logat>`), îl rulează o singură
+  dată, apoi îl șterge imediat (bloc `finally`, best-effort). Motivul: `Win32_Process::Create`
+  peste CIM/DCOM pornește *întotdeauna* procesele în Session 0 (izolată, non-interactivă) —
+  limitare documentată Microsoft, nu o problemă de drepturi — deci un mesaj afișat așa nu
+  ajunge niciodată vizibil pe ecranul utilizatorului conectat. Task-ul Scheduler cu
+  declanșator interactiv e singura cale documentată de a ocoli asta fără WinRM. Task-ul e
+  creat/pornit/șters exclusiv prin sesiunea CIM/DCOM deja deschisă (niciun alt protocol de
+  la distanță) și nu rămâne nimic persistent pe stație. Constrângerea „fără scheduled task"
+  rămâne validă neschimbată pentru colector și pentru orice altă funcționalitate.
 - **Strict read-only.** Colectorul nu scrie, nu instalează, nu repornește, nu modifică nimic
   pe stațiile interogate. `Win32_Product` este **interzis** (declanșează reconfigurare MSI).
 - **PowerShell 5.1** pentru `collector/Collect-Inventory.ps1`, fără dependențe externe
