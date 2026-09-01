@@ -50,7 +50,7 @@
         </a>
       </th>
       {% endfor %}
-      <th>Acțiuni</th>
+      <th class="actions-col">Acțiuni</th>
     </tr>
   </thead>
   <tbody>
@@ -73,7 +73,7 @@
       </td>
       <td><span class="badge badge-{{ r.status | status_class }}">{{ r.status or '—' }}</span></td>
       <td>{{ r.last_seen | fmt_dt }}</td>
-      <td>
+      <td class="actions-col">
         <button type="button" class="btn-secondary msg-open-btn"
                 data-host="{{ r.name }}"
                 data-last-boot="{{ r.last_boot | fmt_dt }}"

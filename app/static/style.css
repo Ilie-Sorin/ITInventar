@@ -356,6 +356,18 @@ table { border-collapse: collapse; width: 100%; }
 .sortable th a:hover { color: var(--text); text-decoration: none; }
 .sort-arrow { font-size: 10px; color: var(--accent-ink); }
 
+/* Coloană fixă la dreapta (ex. "Acțiuni" din /statii) — tabelul are multe
+   coloane și derulează orizontal; fără asta, un buton din ultima coloană
+   rămâne complet în afara ecranului fără niciun indiciu vizual. */
+.actions-col {
+  position: sticky;
+  right: 0;
+  background: var(--bg);
+  box-shadow: -6px 0 8px -6px rgba(20, 20, 19, 0.25);
+  white-space: nowrap;
+}
+.data-table tbody tr:hover .actions-col { background: var(--surface-hover); }
+
 .mini-table { width: 100%; }
 .mini-table td { padding: 4px 6px; border: none; font-size: 13px; }
 .mini-table td.num { text-align: right; font-variant-numeric: tabular-nums; width: 48px; }
