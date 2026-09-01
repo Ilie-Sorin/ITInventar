@@ -1,8 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ host.name }}{% endblock %}
 {% block content %}
-<h1>{{ host.name }}</h1>
-<p class="subtitle">{{ host.ou_path or '—' }} · {{ host.ad_description or '' }}</p>
+<div class="page-header-row">
+  <div>
+    <h1>{{ host.name }}</h1>
+    <p class="subtitle">{{ host.ou_path or '—' }} · {{ host.ad_description or '' }}</p>
+  </div>
+  <button type="button" class="btn-secondary msg-open-btn"
+          data-host="{{ host.name }}"
+          data-last-boot="{{ (current.last_boot | fmt_dt) if current else '—' }}"
+          data-uptime="{{ (current.uptime_days | fmt_num) if current else '—' }}"
+          data-reboot="{{ 'da' if (current and current.level == 2 and current.reboot_pending) else ('nu' if (current and current.level == 2) else 'necunoscut (necesită Nivel 2)') }}">
+    Mesaj…
+  </button>
+</div>
 
 <div class="grid-2col">
   <section class="card">
@@ -218,4 +229,6 @@
   </table>
   </div>
 </section>
+
+{% include "_msg_modal.html" %}
 {% endblock %}
