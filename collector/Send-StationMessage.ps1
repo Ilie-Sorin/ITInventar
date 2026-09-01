@@ -62,7 +62,28 @@ try {
         exit 1
     }
 
-    Write-Output ("OK pid=" + $result.ProcessId)
+    # Win32_Process::Create confirmă doar că procesul a PORNIT pe stație, nu că
+    # msg.exe a reușit să livreze mesajul — trimiterea către o altă sesiune
+    # (WTSSendMessage, folosit intern de msg.exe) cere de regulă privilegiul
+    # SeTcbPrivilege/context LocalSystem, pe care un cont obișnuit de admin nu-l
+    # are automat prin CIM/DCOM; dacă îi lipsește, msg.exe se închide aproape
+    # instant, fără nicio eroare vizibilă pentru noi. Verificăm dacă mai există
+    # peste puțin timp: dacă a dispărut deja, semnalăm explicit suspiciunea, ca
+    # un "succes" din /statie să nu ascundă un mesaj care n-a ajuns niciodată pe
+    # ecran.
+    Start-Sleep -Milliseconds 1500
+    $stillRunning = Get-CimInstance -CimSession $session -ClassName Win32_Process `
+        -Filter "ProcessId = $($result.ProcessId)" -ErrorAction SilentlyContinue
+
+    if (-not $stillRunning) {
+        Write-Error ("msg.exe a pornit pe $ComputerName (pid=$($result.ProcessId)) dar s-a inchis " +
+            "aproape imediat - probabil nu are dreptul sa trimita mesaje catre sesiunea " +
+            "utilizatorului (SeTcbPrivilege/LocalSystem), nu o problema de conectivitate. " +
+            "Mesajul cel mai probabil NU a ajuns pe ecran.")
+        exit 1
+    }
+
+    Write-Output ("OK pid=" + $result.ProcessId + " (proces inca activ dupa 1.5s - asteapta confirmarea utilizatorului)")
 }
 finally {
     if ($session) { Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue }
