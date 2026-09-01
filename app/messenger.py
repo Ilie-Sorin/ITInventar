@@ -4,8 +4,10 @@ stație, folosit de POST /statie/<name>/mesaj din webapp.py.
 
 Ca și colectorul, comunicarea cu stația se face exclusiv prin CIM peste DCOM
 (fără WinRM, vezi CLAUDE.md) — script-ul PowerShell
-collector/Send-StationMessage.ps1 pornește msg.exe LOCAL pe stația țintă prin
-Win32_Process::Create (necesită drepturi de admin acolo).
+collector/Send-StationMessage.ps1 creează un task Scheduler temporar,
+interactiv, care rulează msg.exe în sesiunea utilizatorului logat, apoi îl
+șterge (necesită drepturi de admin pe stația țintă; vezi excepția explicită
+documentată în CLAUDE.md pentru "fără scheduled task").
 
 Spre deosebire de Collect-Inventory.ps1, acțiunea de aici NU e read-only —
 constrângerea "strict read-only" din CLAUDE.md privește colectorul automat de
@@ -24,7 +26,12 @@ class MessengerError(RuntimeError):
 
 
 def send_message(computer_name: str, message: str, admin_user: str | None = None,
-                  admin_pass: str | None = None, timeout_sec: int = 30) -> None:
+                  admin_pass: str | None = None, timeout_sec: int = 90) -> None:
+    # 90s, nu 30s: fluxul prin task Scheduler (creare + rulare + verificare +
+    # ștergere) înseamnă multe apeluri CIM secvențiale, fiecare cu propria
+    # latență de rețea reală — pe o stație de domeniu reală, suma lor a
+    # depășit 30s (confirmat: eroarea de timeout a apărut corect, dar prea
+    # devreme, nu era un blocaj real).
     args = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", str(SCRIPT_PATH),

@@ -418,7 +418,11 @@
         payload.admin_pass = msgAdminPass.value;
       }
       msgSendBtn.disabled = true;
-      msgSendBtn.textContent = "Se trimite…";
+      // Fluxul prin task Scheduler (creare + rulare + verificare + ștergere,
+      // vezi Send-StationMessage.ps1) înseamnă mai multe apeluri CIM
+      // secvențiale — poate dura până la un minut pe o rețea reală, nu e
+      // un blocaj dacă durează câteva zeci de secunde.
+      msgSendBtn.textContent = "Se trimite… (poate dura până la un minut)";
 
       fetch("/statie/" + encodeURIComponent(currentMsgHost) + "/mesaj", {
         method: "POST",
