@@ -429,6 +429,13 @@ table { border-collapse: collapse; width: 100%; }
 
 /* ---------- Modal (mesaj către stație — pagina /statii) ---------- */
 
+/* .elevate-fields e ancorat cu right:0 fața de .scan-elevate-wrap — merge
+   în topbar (base.html) fiindca acolo wrap-ul stă lângă marginea dreaptă a
+   unei benzi late, dar în modal-box (520px) wrap-ul stă lângă marginea
+   stângă, deci ancorarea right:0 împinge panoul (~196px) în afara marginii
+   stângi a modalului. Ancorăm invers doar aici. */
+.modal-box .elevate-fields { left: 0; right: auto; }
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
