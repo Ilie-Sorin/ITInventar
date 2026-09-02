@@ -54,5 +54,11 @@ def send_message(computer_name: str, message: str, admin_user: str | None = None
     except subprocess.TimeoutExpired:
         raise MessengerError("Trimiterea mesajului a durat prea mult (timeout).")
 
+    # Stdout-ul scriptului nu ajunge altfel nicaieri (nu e in raspunsul catre
+    # browser, vezi ruta /statie/<name>/mesaj din webapp.py) - il scoatem in
+    # consola unde ruleaza aplicatia, utila pentru diagnostic ulterior.
+    if proc.stdout:
+        print("[mesaj]", proc.stdout.strip(), flush=True)
+
     if proc.returncode != 0:
         raise MessengerError(proc.stderr.strip() or "Script-ul de trimitere a mesajului a eșuat.")

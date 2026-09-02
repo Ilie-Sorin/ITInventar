@@ -165,6 +165,22 @@ try {
         exit 1
     }
 
+    # Limita de mai jos NU e despre parsarea liniei de comandă (ghilimele,
+    # linii noi) - e o limitare separată a lui msg.exe insusi, descoperita
+    # empiric 2026-09-02: peste ~240-250 caractere, fereastra pop-up nu mai
+    # apare DELOC pe statia tinta, fara nicio eroare vizibila - Task
+    # Scheduler raporteaza in continuare succes (Last Result=0), ceea ce a
+    # facut bug-ul foarte greu de diagnosticat (parea un esec tacut aleatoriu
+    # in loc de o limita fixa de lungime). Nedocumentata oficial de
+    # Microsoft; verificata prin bisectie manuala pe o statie reala. Webapp.py
+    # si app.js valideaza deja asta inainte sa ajunga aici, dar verificam si
+    # aici pentru orice alt apelant al scriptului.
+    if ($Message.Length -gt 240) {
+        Write-Error ("Mesajul are $($Message.Length) caractere, peste limita de 240 - msg.exe " +
+            "nu mai afiseaza fereastra peste aceasta limita (verificat empiric).")
+        exit 1
+    }
+
     # Scoatem ghilimelele duble și înlocuim liniile noi cu un separator vizual
     # simplu — mesajul traversează DOUĂ niveluri de linie-de-comandă imbricate
     # (schtasks /TR conține el însuși comanda msg.exe), iar caractere de

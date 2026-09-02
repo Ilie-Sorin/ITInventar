@@ -469,6 +469,8 @@ table { border-collapse: collapse; width: 100%; }
   font-size: 13px;
   resize: vertical;
 }
+.msg-modal-counter { margin: 4px 0 0; font-size: 11px; color: var(--text-muted); text-align: right; }
+.msg-modal-counter-warn { color: var(--crit-text); font-weight: 600; }
 .modal-actions {
   display: flex;
   justify-content: flex-end;

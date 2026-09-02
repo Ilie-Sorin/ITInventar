@@ -586,6 +586,17 @@ def send_station_message(name):
     message = (data.get("message") or "").strip()
     if not message:
         return jsonify({"error": "Mesajul nu poate fi gol."}), 400
+    # Limită confirmată empiric 2026-09-02: peste ~240-250 caractere, msg.exe
+    # nu mai afișează deloc fereastra pe stația țintă - fără nicio eroare,
+    # Task Scheduler raportează în continuare succes (Last Result=0). Validăm
+    # și aici (nu doar în JS/maxlength din UI), ca un apel direct la API să nu
+    # poată trimite un mesaj care "reușește" dar nu se vede niciodată.
+    MSG_MAX_CHARS = 240
+    if len(message) > MSG_MAX_CHARS:
+        return jsonify({"error": (
+            f"Mesajul depășește {MSG_MAX_CHARS} de caractere - msg.exe nu mai afișează "
+            "fereastra peste această limită (verificat empiric)."
+        )}), 400
 
     admin_user = (data.get("admin_user") or "").strip() or None
     admin_pass = data.get("admin_pass") or None

@@ -360,24 +360,39 @@
     var msgAdminPass = document.getElementById("msg-admin-pass");
     var msgElevateToggle = document.getElementById("msg-elevate-toggle");
     var msgElevateFields = document.getElementById("msg-elevate-fields");
+    var msgCounter = document.getElementById("msg-modal-counter");
     var currentMsgHost = null;
+
+    // msg.exe (utilitarul Windows apelat de Send-StationMessage.ps1) are o
+    // limită nedocumentată oficial, dar confirmată empiric 2026-09-02: peste
+    // ~240-250 caractere fereastra pop-up nu se mai afișează DELOC pe stația
+    // țintă — fără nicio eroare vizibilă, Task Scheduler raportează în
+    // continuare succes (Last Result=0). Sub acest prag lucrurile merg
+    // perfect, inclusiv cu diacritice și linii multiple. De-aia mesajul
+    // implicit trebuie ținut scurt și userul nu poate depăși limita din UI
+    // (vezi MSG_MAX_CHARS mai jos și validarea din webapp.py).
+    var MSG_MAX_CHARS = 240;
 
     // Text implicit (§ cerință): pornește de la formularea standard cerută,
     // completată cu datele reale ale stației (ultima pornire, uptime, reboot
-    // în așteptare) — rămâne complet editabil înainte de trimitere.
+    // în așteptare) — rămâne complet editabil înainte de trimitere. Ținut
+    // scurt intenționat, ca să încapă sub MSG_MAX_CHARS chiar și în cazul cel
+    // mai lung de rebootLabel ("necunoscut (necesită Nivel 2)").
     function buildDefaultMessage(lastBoot, uptime, rebootLabel) {
-      return "Mesaj din partea Administratorului de Active Directory.\n\n" +
-        "Conform ultimei interogări de inventariere: ultima pornire a stației a fost la " +
-        lastBoot + ", cu un uptime curent de " + uptime + " zile. Reboot în așteptare: " +
-        rebootLabel + ".\n\n" +
-        "Vă rugăm ca în perioada următoare să efectuați un Restart al stației dumneavoastră.\n\n" +
-        "Vă rugăm să urmați această procedură atunci când aveți un interval de timp în care nu " +
-        "este strict necesară utilizarea PC-ului.\n\n" +
-        "Vă mulțumim pentru înțelegere.";
+      return "Mesaj din partea Administratorului AD.\n\n" +
+        "Vă rugăm să reporniți stația când aveți un interval liber (uptime curent: " +
+        uptime + " zile; reboot în așteptare: " + rebootLabel + ").\n\n" +
+        "Mulțumim!";
     }
 
     function closeMsgModal() {
       msgBackdrop.hidden = true;
+    }
+
+    function updateMsgCounter() {
+      var len = msgText.value.length;
+      msgCounter.textContent = len + " / " + MSG_MAX_CHARS + " caractere";
+      msgCounter.classList.toggle("msg-modal-counter-warn", len >= MSG_MAX_CHARS);
     }
 
     document.querySelectorAll(".msg-open-btn").forEach(function (btn) {
@@ -395,9 +410,11 @@
         msgAdminPass.value = "";
         msgElevateFields.hidden = true;
         msgBackdrop.hidden = false;
+        updateMsgCounter();
       });
     });
 
+    msgText.addEventListener("input", updateMsgCounter);
     msgCancelBtn.addEventListener("click", closeMsgModal);
     msgBackdrop.addEventListener("click", function (evt) {
       if (evt.target === msgBackdrop) closeMsgModal();
@@ -411,6 +428,12 @@
     msgSendBtn.addEventListener("click", function () {
       msgError.hidden = true;
       msgSuccess.hidden = true;
+      if (msgText.value.length > MSG_MAX_CHARS) {
+        msgError.textContent = "Mesajul depășește " + MSG_MAX_CHARS + " de caractere — " +
+          "msg.exe nu mai afișează fereastra peste această limită (verificat empiric).";
+        msgError.hidden = false;
+        return;
+      }
       var payload = { message: msgText.value };
       var au = msgAdminUser.value.trim();
       if (au) {
