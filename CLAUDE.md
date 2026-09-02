@@ -10,7 +10,10 @@ Constrângeri obligatorii pentru orice lucru pe acest proiect (detalii complete 
   (`POST /statie/<nume>/mesaj`, implementată în `collector/Send-StationMessage.ps1`) creează
   pe stația țintă un task Windows temporar, cu nume unic, cu declanșator „doar când
   utilizatorul e logat, interactiv" (`schtasks /IT /RU <user logat>`), îl rulează o singură
-  dată, apoi îl șterge imediat (bloc `finally`, best-effort). Motivul: `Win32_Process::Create`
+  dată, apoi îl șterge după un interval de grație (implicit 20s, bloc `finally`, best-effort) —
+  nu imediat: verificat empiric că `schtasks /Delete /F` chiar imediat după `Run` închide
+  fereastra `msg.exe` încă neconfirmată de utilizator, deși mesajul ajunsese deja pe ecran.
+  Motivul task-ului în sine: `Win32_Process::Create`
   peste CIM/DCOM pornește *întotdeauna* procesele în Session 0 (izolată, non-interactivă) —
   limitare documentată Microsoft, nu o problemă de drepturi — deci un mesaj afișat așa nu
   ajunge niciodată vizibil pe ecranul utilizatorului conectat. Task-ul Scheduler cu
