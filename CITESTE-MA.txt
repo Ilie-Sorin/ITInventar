@@ -70,8 +70,10 @@ citești.
     - Nivel 1: date de bază (hardware, OS, rețea, disc, antivirus) —
       rapid.
     - Nivel 2: Nivel 1 + software instalat, ultimul utilizator,
-      reboot în așteptare — mai lent, dar mult mai complet. Pentru
-      un test relevant, pornește măcar o dată o scanare de Nivel 2.
+      reboot în așteptare, dimensiune și număr de fișiere din
+      Desktop/Downloads per utilizator — mai lent, dar mult mai
+      complet. Pentru un test relevant, pornește măcar o dată o
+      scanare de Nivel 2.
 
   Dacă contul cu care ai pornit aplicația nu are deja drepturi de
   admin pe stațiile țintă, poți da separat un cont de admin AD doar

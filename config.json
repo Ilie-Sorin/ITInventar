@@ -5,6 +5,7 @@
   "tcp_probe_timeout_ms": 400,
   "cim_timeout_sec": 45,
   "reg_timeout_sec": 60,
+  "folder_stats_timeout_sec": 20,
   "db_path": "inventar.db",
   "keep_runs": 60,
   "alerts": {

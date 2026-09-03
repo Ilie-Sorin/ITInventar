@@ -329,6 +329,17 @@ def ingest_record(conn, run_id, record) -> int:
                      sw.get("install_date"), sw.get("scope"), sw.get("user")),
                 )
 
+        conn.execute("DELETE FROM snapshot_folder_stats WHERE snapshot_id = ?", (snapshot_id,))
+        if registry:
+            for fs in registry.get("folder_stats") or []:
+                conn.execute(
+                    """
+                    INSERT INTO snapshot_folder_stats (snapshot_id, user_name, folder, file_count, size_mb)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (snapshot_id, fs.get("user"), fs.get("folder"), fs.get("file_count"), fs.get("size_mb")),
+                )
+
         conn.commit()
     except Exception:
         conn.rollback()

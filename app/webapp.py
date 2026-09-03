@@ -538,6 +538,17 @@ def station_detail(name):
         software_machine = [s for s in software if s["scope"] != "user"]
         software_user = [s for s in software if s["scope"] == "user"]
 
+    folder_stats = []
+    if software_snapshot:
+        # Aceeași sursă/snapshot ca softul per utilizator (§5.5g): ambele vin
+        # din blocul Nivel 2, deci reutilizăm software_snapshot în loc să mai
+        # căutăm încă un snapshot separat.
+        folder_stats = conn.execute(
+            "SELECT user_name, folder, file_count, size_mb FROM snapshot_folder_stats "
+            "WHERE snapshot_id = ? ORDER BY user_name COLLATE NOCASE, folder",
+            (software_snapshot["id"],),
+        ).fetchall()
+
     recent_alerts = conn.execute(
         """
         SELECT a.*, r.started_at FROM alerts a
@@ -565,7 +576,7 @@ def station_detail(name):
         current_antivirus=current_antivirus,
         disk_history=disk_history, status_history=status_history,
         software=software, software_machine=software_machine, software_user=software_user,
-        software_snapshot=software_snapshot, recent_alerts=recent_alerts,
+        software_snapshot=software_snapshot, folder_stats=folder_stats, recent_alerts=recent_alerts,
         chart_points=chart_points, chart_w=chart_w, chart_h=chart_h,
         disk_threshold=disk_threshold, threshold_y=threshold_y,
     )

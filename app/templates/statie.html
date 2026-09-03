@@ -210,6 +210,34 @@
 </section>
 
 <section class="card">
+  <h2>Desktop / Downloads {% if software_snapshot %}<span class="muted">(la {{ software_snapshot.collected_at | fmt_dt }})</span>{% endif %}</h2>
+  <p class="subtitle">Dimensiune și număr de fișiere, recursiv (inclusiv subfoldere), per profil de utilizator —
+    citit direct din sistemul de fișiere (WMI/CIM_DataFile), nu necesită utilizatorul logat la momentul scanării
+    (§5.5g din spec).</p>
+  {% if folder_stats %}
+  <div class="table-scroll">
+  <table class="data-table compact">
+    <thead><tr><th>Utilizator</th><th>Folder</th><th class="num">Fișiere</th><th class="num">Dimensiune</th></tr></thead>
+    <tbody>
+    {% for f in folder_stats %}
+      <tr>
+        <td>{{ f.user_name or '—' }}</td>
+        <td>{{ f.folder }}</td>
+        <td class="num">{{ f.file_count if f.file_count is not none else '—' }}</td>
+        <td class="num">{{ f.size_mb | fmt_mb }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif current and current.level == 1 %}
+  <p class="empty-state"><span class="muted">indisponibil la Nivel 1</span></p>
+  {% else %}
+  <p class="empty-state">Fără date Desktop/Downloads încă (necesită o colectare de Nivel 2).</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Toate snapshot-urile</h2>
   <div class="table-scroll">
   <table class="data-table compact">

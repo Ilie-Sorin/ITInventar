@@ -26,6 +26,10 @@ param(
     [int]      $TcpProbeTimeoutMs = 400,
     [int]      $CimTimeoutSec = 45,
     [int]      $RegTimeoutSec = 60,
+    [int]      $FolderStatsTimeoutSec = 20,   # timeout separat, PER folder (Desktop/Downloads per
+                                               # utilizator) — interogarea CIM_DataFile e cunoscută ca
+                                               # lentă pe WMI; un folder mare nu trebuie să blocheze
+                                               # restul colectării Nivel 2 (vezi Get-FolderStat)
     [string[]] $ComputerName,                # opțional: listă explicită (pentru test)
     [switch]   $WhatIfDiscoveryOnly,          # doar interogarea AD, fără contact cu stațiile
     [System.Management.Automation.PSCredential]
@@ -406,6 +410,103 @@ function Test-RegValueExists {
     return (@($r.sNames) -contains $ValueName)
 }
 
+function Get-FolderStat {
+    <#
+        Numără fișierele și însumează dimensiunea lor dintr-un folder, RECURSIV
+        (include subfolderele), interogând WMI/CIM_DataFile — nu există o metodă
+        WMI dedicată pentru "dimensiune de folder", de-asta se agregă per fișier.
+        Rulează pe aceeași sesiune CIM/DCOM ca restul colectării (nicio conexiune
+        nouă, niciun protocol nou).
+
+        IMPORTANT — de ce parcurgere manuală nivel-cu-nivel (BFS), NU o singură
+        interogare cu wildcard: testat empiric, "Path LIKE '...\\%'" (recursiv
+        direct în WQL) se comportă ca un scan al ÎNTREGII unități — a expirat
+        (timeout la 30s) chiar și pe un folder de test cu 2 fișiere, deci
+        providerul WMI clar nu restrânge scanarea la subarbore pe baza clauzei
+        LIKE (mecanismul intern exact nu e verificat, doar comportamentul). În
+        schimb, o interogare cu Path='<cale exactă>' (fără wildcard) e rapidă
+        (~30-100ms, verificat empiric): de-asta funcția cere, per folder, DOAR
+        fișierele/subfolderele DIRECTE (Path exact), apoi pune subfolderele
+        într-o coadă și repetă — exact simetric cu Win32_Directory (subfoldere)
+        și CIM_DataFile (fișiere), ambele indexate după aceeași pereche
+        Drive/Path.
+
+        WQL tratează backslash ca literal de escape în șirurile din interogare
+        (ca într-un regex) — un singur backslash real trebuie scris dublat în
+        textul interogării, altfel parserul WQL îl interpretează greșit.
+        Apostroful (rar într-un nume de utilizator) e dublat separat, convenția
+        SQL/WQL de a scăpa ghilimeaua simplă.
+
+        LIMITĂRI (best-effort, documentate ca atare, la fel ca decodarea
+        productState de mai sus):
+          - plafon $MaxDirs foldere vizitate — protecție împotriva unui arbore
+            neobișnuit de larg/adânc sau a unei bucle (ex. joncțiune NTFS
+            auto-referitoare); dincolo de plafon, agregarea se oprește cu ce s-a
+            adunat până atunci (subraportare tăcută, nu eroare).
+          - dacă $TimeoutSec (per folder Desktop/Downloads întreg, nu per
+            interogare) e depășit înainte de a termina, funcția întoarce $null
+            (tratat de apelant ca "fără date"), la fel ca un eșec de interogare.
+          - numără doar fișiere, nu subfoldere — file_count e strict numărul de
+            fișiere, nu "elemente".
+        Întoarce $null dacă rădăcina nu poate fi descompusă în literă de
+        unitate + rest, prima interogare eșuează, sau timeout-ul e depășit;
+        un folder existent dar gol întoarce Count=0/SizeMb=0 (nu $null).
+    #>
+    param($CimSession, [string]$BasePath, [string]$SubFolder, [int]$TimeoutSec, [int]$MaxDirs = 3000)
+
+    if ($BasePath -notmatch '^([A-Za-z]):\\(.*)$') { return $null }
+    $drive = $Matches[1] + ':'
+    $rest = $Matches[2].TrimEnd('\')
+    $rootRelative = if ($rest) { "$rest\$SubFolder" } else { $SubFolder }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $queue = New-Object System.Collections.Generic.Queue[string]
+    $queue.Enqueue($rootRelative)
+    $visited = 0
+    $totalCount = 0
+    $totalSizeBytes = [int64]0
+    $sawRoot = $false
+
+    while ($queue.Count -gt 0) {
+        if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) { return $null }
+        if ($visited -ge $MaxDirs) { break }
+        $visited++
+        $relative = $queue.Dequeue()
+        $escaped = $relative.Replace("'", "''").Replace('\', '\\')
+
+        try {
+            $files = @(Get-CimInstance -CimSession $CimSession `
+                -Query "SELECT FileSize FROM CIM_DataFile WHERE Drive='$drive' AND Path='\\$escaped\\'" `
+                -OperationTimeoutSec $TimeoutSec -ErrorAction Stop)
+            $subdirs = @(Get-CimInstance -CimSession $CimSession `
+                -Query "SELECT Name FROM Win32_Directory WHERE Drive='$drive' AND Path='\\$escaped\\'" `
+                -OperationTimeoutSec $TimeoutSec -ErrorAction Stop)
+        } catch {
+            if ($relative -eq $rootRelative) { return $null }   # rădăcina nu răspunde -> fără date deloc
+            continue   # un subfolder ilizibil (ex. permisiuni) nu oprește restul agregării
+        }
+
+        $sawRoot = $true
+        $totalCount += $files.Count
+        foreach ($f in $files) { if ($f.FileSize) { $totalSizeBytes += [int64]$f.FileSize } }
+
+        foreach ($d in $subdirs) {
+            # Win32_Directory.Name e calea completă (ex. "C:\Users\ion\Desktop\Poze");
+            # o reducem la aceeași reprezentare relativă la unitate ("rest\SubFolder\...")
+            # cu care lucrează restul funcției, ca următoarea iterație s-o poată re-escapa.
+            if ($d.Name -match '^[A-Za-z]:\\(.*)$') {
+                $queue.Enqueue($Matches[1])
+            }
+        }
+    }
+
+    if (-not $sawRoot) { return $null }
+    return @{
+        Count  = $totalCount
+        SizeMb = if ($totalSizeBytes) { [math]::Round($totalSizeBytes / 1MB, 1) } else { 0 }
+    }
+}
+
 function Get-Level1Snapshot {
     <#
         Nivel 1: toate interogările pe ACEEAȘI CimSession (deschisă de apelant),
@@ -564,7 +665,7 @@ function Get-Level2Snapshot {
         de subchei × 4 valori fiecare — motiv pentru care apelantul măsoară
         separat durata acestui bloc (duration_reg_ms) față de blocul CIM.
     #>
-    param($CimSession, [int]$TimeoutSec)
+    param($CimSession, [int]$TimeoutSec, [int]$FolderStatsTimeoutSec = 20)
 
     $HKLM = [uint32]2147483650   # 0x80000002 — HKEY_LOCAL_MACHINE, cerut de StdRegProv ca număr
 
@@ -575,6 +676,7 @@ function Get-Level2Snapshot {
         RebootPending    = $false
         WuLastSuccess    = $null
         Software         = New-Object System.Collections.Generic.List[hashtable]
+        FolderStats      = New-Object System.Collections.Generic.List[hashtable]
         Errors           = New-Object System.Collections.Generic.List[string]
     }
 
@@ -735,6 +837,42 @@ function Get-Level2Snapshot {
         $result.Errors.Add("Software per utilizator (HKEY_USERS/ProfileList): $($_.Exception.Message)")
     }
 
+    # g) Dimensiune și număr de fișiere din Desktop/Downloads, per profil de
+    # utilizator. Spre deosebire de blocul (f) de mai sus, NU necesită hive-ul
+    # NTUSER.DAT montat — calea folderului vine direct din ProfileImagePath
+    # (HKLM\...\ProfileList), disponibilă indiferent dacă profilul e logat sau
+    # nu, deci funcționează și pentru profile offline. De-asta e un bloc
+    # separat, cu propriul try/catch: nu vrem ca un eșec aici (sau invers) să
+    # ascundă datele celuilalt bloc.
+    try {
+        $profileListPath = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+        $profileSids = Get-RegSubKeyNames -CimSession $CimSession -Hive $HKLM -Path $profileListPath -TimeoutSec $TimeoutSec
+        foreach ($psid in $profileSids) {
+            # Doar conturi normale (domeniu sau local) — excludem conturile de
+            # serviciu, la fel ca la blocul (f).
+            if ($psid -notmatch '^S-1-5-21-') { continue }
+
+            $imagePath = Get-RegStringValue -CimSession $CimSession -Hive $HKLM `
+                -Path "$profileListPath\$psid" -ValueName 'ProfileImagePath' -TimeoutSec $TimeoutSec
+            if (-not $imagePath) { continue }
+            $userName = ($imagePath -split '\\')[-1]
+
+            foreach ($folder in @('Desktop', 'Downloads')) {
+                $stat = Get-FolderStat -CimSession $CimSession -BasePath $imagePath -SubFolder $folder -TimeoutSec $FolderStatsTimeoutSec
+                if ($null -ne $stat) {
+                    $result.FolderStats.Add(@{
+                        user       = $userName
+                        folder     = $folder
+                        file_count = $stat.Count
+                        size_mb    = $stat.SizeMb
+                    })
+                }
+            }
+        }
+    } catch {
+        $result.Errors.Add("FolderStats Desktop/Downloads (ProfileList): $($_.Exception.Message)")
+    }
+
     return $result
 }
 
@@ -756,6 +894,7 @@ function Invoke-StationCollection {
         [int]       $TcpProbeTimeoutMs,
         [int]       $CimTimeoutSec,
         [int]       $RegTimeoutSec,
+        [int]       $FolderStatsTimeoutSec,
         [System.Management.Automation.PSCredential] $Credential
     )
 
@@ -824,7 +963,7 @@ function Invoke-StationCollection {
 
         if ($Level -eq 2) {
             $regSw = [System.Diagnostics.Stopwatch]::StartNew()
-            $l2 = Get-Level2Snapshot -CimSession $session -TimeoutSec $RegTimeoutSec
+            $l2 = Get-Level2Snapshot -CimSession $session -TimeoutSec $RegTimeoutSec -FolderStatsTimeoutSec $FolderStatsTimeoutSec
             $regSw.Stop()
             $record.duration_reg_ms = [int]$regSw.Elapsed.TotalMilliseconds
 
@@ -837,6 +976,7 @@ function Invoke-StationCollection {
                 reboot_pending      = $l2.RebootPending
                 wu_last_success     = $l2.WuLastSuccess
                 software            = @($l2.Software)
+                folder_stats        = @($l2.FolderStats)
             }
             $errs.AddRange($l2.Errors)
         }
@@ -915,7 +1055,7 @@ try {
         'ConvertTo-Iso8601', 'Test-Port445', 'ConvertFrom-ProductState',
         'Resolve-CollectionStatus', 'Format-CollectionError',
         'Get-RegSubKeyNames', 'Get-RegStringValue', 'Get-RegDwordValue',
-        'Test-RegKeyExists', 'Test-RegValueExists',
+        'Test-RegKeyExists', 'Test-RegValueExists', 'Get-FolderStat',
         'Get-Level1Snapshot', 'Get-Level2Snapshot', 'Invoke-StationCollection'
     )
     $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
@@ -934,10 +1074,11 @@ try {
             $ps = [powershell]::Create()
             $ps.RunspacePool = $pool
             [void]$ps.AddScript({
-                param($AdInfo, $Level, $TcpMs, $CimSec, $RegSec, $Cred)
+                param($AdInfo, $Level, $TcpMs, $CimSec, $RegSec, $FolderSec, $Cred)
                 Invoke-StationCollection -AdInfo $AdInfo -Level $Level `
-                    -TcpProbeTimeoutMs $TcpMs -CimTimeoutSec $CimSec -RegTimeoutSec $RegSec -Credential $Cred
-            }).AddArgument($ad).AddArgument($Level).AddArgument($TcpProbeTimeoutMs).AddArgument($CimTimeoutSec).AddArgument($RegTimeoutSec).AddArgument($Credential)
+                    -TcpProbeTimeoutMs $TcpMs -CimTimeoutSec $CimSec -RegTimeoutSec $RegSec `
+                    -FolderStatsTimeoutSec $FolderSec -Credential $Cred
+            }).AddArgument($ad).AddArgument($Level).AddArgument($TcpProbeTimeoutMs).AddArgument($CimTimeoutSec).AddArgument($RegTimeoutSec).AddArgument($FolderStatsTimeoutSec).AddArgument($Credential)
 
             $jobs.Add([PSCustomObject]@{
                 Pipeline = $ps

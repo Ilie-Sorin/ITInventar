@@ -210,6 +210,7 @@ class Scanner:
             "-TcpProbeTimeoutMs", str(cfg.get("tcp_probe_timeout_ms", 400)),
             "-CimTimeoutSec", str(cfg.get("cim_timeout_sec", 45)),
             "-RegTimeoutSec", str(cfg.get("reg_timeout_sec", 60)),
+            "-FolderStatsTimeoutSec", str(cfg.get("folder_stats_timeout_sec", 20)),
         ]
         if ou_base:
             args += ["-OuBase", ou_base]

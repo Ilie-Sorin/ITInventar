@@ -124,6 +124,15 @@ CREATE TABLE IF NOT EXISTS snapshot_software (
     user_name    TEXT               -- numele contului, doar când scope = 'user' (§5.5f)
 );
 
+CREATE TABLE IF NOT EXISTS snapshot_folder_stats (
+    id           INTEGER PRIMARY KEY,
+    snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    user_name    TEXT NOT NULL,
+    folder       TEXT NOT NULL,     -- 'Desktop' | 'Downloads'
+    file_count   INTEGER,
+    size_mb      REAL
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
     id           INTEGER PRIMARY KEY,
     run_id       INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,

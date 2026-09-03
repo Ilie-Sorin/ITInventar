@@ -292,6 +292,17 @@ fiecărui utilizator LOGAT apare ca subcheie `HKEY_USERS\<SID>`. Se citește:
 offline fără să-l montăm noi (ceea ce ar fi o scriere pe stația țintă, interzisă). Documentat
 explicit și în UI (`/statie/<name>`).
 
+**g) Dimensiune și număr de fișiere din Desktop/Downloads, per profil** — spre deosebire de
+blocul (f), NU necesită hive-ul montat: calea folderului vine direct din `ProfileImagePath`
+(HKLM, pas 1 de mai sus), deci funcționează și pentru profile offline. Numărătoarea în sine
+nu e prin registry, ci prin interogări WMI/CIM (`CIM_DataFile`/`Win32_Directory`), pe aceeași
+sesiune CIM/DCOM — parcurse manual, nivel-cu-nivel (BFS), cu interogări `Path='<cale exactă>'`
+pe fiecare folder, NU cu wildcard `LIKE` (testat empiric: o interogare `CIM_DataFile` cu
+`Path LIKE '...%'` se comportă ca un scan al întregii unități și expiră chiar și pe un folder
+cu 2 fișiere; interogările cu cale exactă sunt rapide, ~30-100ms). Plafon de foldere vizitate ca protecție împotriva unui arbore
+neobișnuit de larg/adânc sau a unei bucle (ex. joncțiune NTFS auto-referitoare) — vezi
+comentariile din `Get-FolderStat` din colector.
+
 Enumerarea softului este partea cea mai costisitoare (zeci de subchei × 4 valori). Se
 măsoară **separat** durata blocului registry (`duration_reg_ms`) față de blocul CIM
 (`duration_cim_ms`) — exact acesta e numărul care fundamentează decizia Nivel 1 vs. Nivel 2.
@@ -364,6 +375,10 @@ măsoară **separat** durata blocului registry (`duration_reg_ms`) față de blo
     "software": [
       { "name": "Zoom Workplace", "version": "6.5.1", "publisher": "Zoom", "install_date": "2026-08-21", "scope": "machine", "user": null },
       { "name": "Slack", "version": "4.39.0", "publisher": "Slack Technologies", "install_date": "2026-07-02", "scope": "user", "user": "popescu.ion" }
+    ],
+    "folder_stats": [
+      { "user": "popescu.ion", "folder": "Desktop", "file_count": 12, "size_mb": 45.3 },
+      { "user": "popescu.ion", "folder": "Downloads", "file_count": 231, "size_mb": 4096.7 }
     ]
   }
 }
@@ -479,6 +494,15 @@ CREATE TABLE snapshot_software (
     user_name    TEXT               -- numele contului, doar când scope = 'user' (§5.5f)
 );
 
+CREATE TABLE snapshot_folder_stats (
+    id           INTEGER PRIMARY KEY,
+    snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    user_name    TEXT NOT NULL,
+    folder       TEXT NOT NULL,     -- 'Desktop' | 'Downloads'
+    file_count   INTEGER,
+    size_mb      REAL               -- §5.5g
+);
+
 CREATE TABLE alerts (
     id           INTEGER PRIMARY KEY,
     run_id       INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -548,7 +572,7 @@ Interfața este în **limba română**.
 |---|---|
 | `GET /` | Dashboard: numărul de stații, distribuția pe status din ultima rulare, alerte critice, distribuția pe versiuni de OS, top 10 stații cu spațiu redus |
 | `GET /statii` | Tabel cu toate stațiile: nume, OU, model, OS + build, IP, ultimul user, spațiu liber C:, uptime, AV, status, ultima vedere. Sortabil pe orice coloană, căutare liberă, filtre pe OU / status / OS |
-| `GET /statie/<name>` | Fișa stației: valorile curente, istoricul spațiului liber (grafic simplu), istoricul statusurilor, lista de software — separat pe mașină și pe utilizator (§5.5f, dacă există date de Nivel 2) —, toate snapshot-urile |
+| `GET /statie/<name>` | Fișa stației: valorile curente, istoricul spațiului liber (grafic simplu), istoricul statusurilor, lista de software — separat pe mașină și pe utilizator (§5.5f, dacă există date de Nivel 2) —, dimensiune și număr de fișiere Desktop/Downloads per utilizator (§5.5g, dacă există date de Nivel 2), toate snapshot-urile |
 | `GET /software` | Doar cu date de Nivel 2: agregare „produs + versiune → număr de stații", cu drill-down la lista de stații. Aici se vede imediat parcul neomogen (versiuni vechi de Zoom, Java, browsere) |
 | `GET /alerte` | Alertele ultimei rulări, grupate pe severitate, cu link la fișa stației; `?rule=` opțional filtrează pe tipul de mesaj (regulă) |
 | `GET /rulari` | **Pagina de decizie a pilotului**: pentru fiecare rulare — nivel, durată totală, medie CIM, medie registry, rată de succes pe status. Plus un panou comparativ Nivel 1 vs. Nivel 2 (medii agregate pe fiecare nivel) |
